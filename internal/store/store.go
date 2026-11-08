@@ -74,7 +74,9 @@ type Store struct {
 
 	// The daemon owns one Store. Consent changes wait for in-flight provider
 	// requests, without holding an archive transaction during network I/O.
-	personMatchConsentMu sync.RWMutex
+	personMatchConsentMu       sync.RWMutex
+	conversationPolicyMu       sync.RWMutex
+	conversationPolicyLockPath string
 
 	sqliteOptimizeMu sync.Mutex
 	// syncOptimizeMu guards lastSyncOptimize, which throttles the planner
@@ -126,6 +128,7 @@ type Store struct {
 	personEnrichmentBudgetBarrier         func()
 	personEnrichmentRunBarrier            func(phase string)
 	personEnrichmentTxBarrier             func(phase string)
+	ensureConversationFastPathHook        func()
 	personEnrichmentOwnershipBarrier      func(phase string, tx *loggedTx)
 	personNetworkSourceReadHook           func(limit, count int)
 	operationHistoryAfterAdapterReadHook  func(kind string)
@@ -271,6 +274,11 @@ func openSQLiteContext(ctx context.Context, dbPath, params string) (*Store, erro
 		sqliteFilesystemPath: filesystemPath,
 		dialect:              dialect,
 		syncExecutionLocks:   newSyncExecutionLockState(),
+	}
+
+	if err := s.initializeConversationPolicyFence(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	// Probe like the read-only opens do: a Store must know whether full-text
@@ -441,6 +449,10 @@ func OpenReadOnlyContext(ctx context.Context, dbPath string) (*Store, error) {
 		dialect:              dialect,
 		readOnly:             true,
 		syncExecutionLocks:   newSyncExecutionLockState(),
+	}
+	if err := s.initializeConversationPolicyFence(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	available, err := dialect.FTSAvailable(ctx, db)
@@ -2552,6 +2564,13 @@ func (s *Store) initSchemaContext(ctx context.Context, version int) error {
 
 	if err := s.ensureFilenameDiscoveryInfrastructure(ctx); err != nil {
 		return err
+	}
+
+	// Search requires policy rows for existing chats. Complete the bootstrap
+	// before publishing readiness, including for callers that initialize the
+	// store directly rather than through pkg/archive.
+	if err := s.runOnceMigration(ctx, migrationConversationPolicyBootstrap, 1, false, s.bootstrapConversationPolicy); err != nil {
+		return fmt.Errorf("initialize conversation policy: %w", err)
 	}
 
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO archive_metadata (key, value)
