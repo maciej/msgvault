@@ -662,30 +662,50 @@ func TestLocalEmbeddingsStartupSharedChoice(t *testing.T) {
 
 func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 	for _, tc := range []struct {
-		name                                          string
+		name, model, endpoint                         string
 		enabled, local, choice, wantBuild, wantChoice bool
 	}{
 		{name: "enabled builtin", enabled: true, local: true, wantBuild: true, wantChoice: true},
 		{name: "disabled builtin", local: true},
 		{name: "disabled builtin with choice", local: true, choice: true, wantChoice: true},
-		{name: "configured provider", enabled: true, choice: true, wantChoice: true},
+		{name: "custom provider", model: "custom-embedding", endpoint: "https://api.example.test/v1", enabled: true, choice: true, wantChoice: true},
+		{name: "Ollama provider", model: "nomic-embed-text", enabled: true, choice: true, wantChoice: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f := newLocalActivationFixture(t, "nomic-embed-text")
+			model := tc.model
+			if model == "" {
+				model = "nomic-embed-text"
+			}
+			f := newLocalActivationFixture(t, model)
 			if tc.choice {
 				require.NoError(t, embedlocal.RecordChoice())
 			}
 			snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
+			embeddings := map[string]any{"local_only": tc.local}
+			if tc.endpoint != "" {
+				embeddings["endpoint"] = tc.endpoint
+			}
 			_, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{
 				{Path: []string{"vector"}, Values: map[string]any{"enabled": tc.enabled}},
-				{Path: []string{"vector", "embeddings"}, Values: map[string]any{"local_only": tc.local}},
+				{Path: []string{"vector", "embeddings"}, Values: embeddings},
 			})
 			require.NoError(t, err)
 			snapshot, err = config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
+			saved, err := f.cfg.ReloadConfigFile(snapshot)
+			require.NoError(t, err)
+			require.Equal(t, model, saved.Vector.Embeddings.Model)
+			if tc.endpoint != "" {
+				require.Equal(t, tc.endpoint, saved.Vector.Embeddings.Endpoint)
+			} else {
+				require.Equal(t, f.cfg.Chat.Server+"/v1", saved.Vector.Embeddings.Endpoint)
+			}
 			f.cfg.Vector.Enabled = tc.enabled
 			f.cfg.Vector.Embeddings.LocalOnly = tc.local
+			if tc.endpoint != "" {
+				f.cfg.Vector.Embeddings.Endpoint = tc.endpoint
+			}
 			f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
 			require.True(t, f.handle.WaitTimeout(5*time.Second))
 			f.controller.handle = f.handle
@@ -702,7 +722,7 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 			after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
 			if !tc.wantBuild {
-				assert.Equal(t, snapshot.ETag, after.ETag)
+				assert.Equal(t, snapshot.Content, after.Content)
 			}
 		})
 	}
