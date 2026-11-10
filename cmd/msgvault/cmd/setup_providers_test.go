@@ -61,6 +61,8 @@ func newSetupProvidersFixture(t *testing.T, content string) *setupProvidersFixtu
 	t.Helper()
 	require := require.New(t)
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	path := filepath.Join(dir, "config.toml")
 	if content != "" {
 		content = strings.ReplaceAll(content, "{{DIR}}", filepath.ToSlash(dir))
@@ -1268,6 +1270,9 @@ func TestSetupProvidersLocalDownloadTransaction(t *testing.T) {
 			loaded := fixture.load(t)
 			assert.Equal(tc.enabled, loaded.Vector.Enabled)
 			assert.Equal(tc.enabled, loaded.Vector.Embeddings.LocalOnly)
+			choice, err := embedlocal.ChoiceRecorded()
+			require.NoError(err)
+			assert.Equal(tc.enabled, choice)
 			assert.Equal(tc.enabled, loaded.Vector.People.Enabled)
 			if !tc.enabled {
 				assert.Contains(output.String(), "msgvault setup providers --local-embeddings")

@@ -115,6 +115,8 @@ func newLocalActivationFixture(t *testing.T, model string) *localActivationFixtu
 	t.Helper()
 	f := &localActivationFixture{ollamaTags: model != ""}
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/tags" {
 			if !f.ollamaTags {
@@ -518,6 +520,9 @@ func TestLocalEmbeddingsSetupFailureKeepsSavedSettings(t *testing.T) {
 			require.Nil(f.handle.vf)
 			require.ErrorContains(err, tc.wantError)
 			require.Equal(tc.wantConflict, errors.Is(err, config.ErrConfigConflict))
+			choice, err := embedlocal.ChoiceRecorded()
+			require.NoError(err)
+			require.False(choice)
 			actual, err := os.ReadFile(f.cfg.ConfigFilePath())
 			require.NoError(err)
 			require.Equal(expected, actual)
@@ -529,6 +534,9 @@ func TestLocalEmbeddingsSetupFailureKeepsSavedSettings(t *testing.T) {
 			require.NoError(err)
 			require.Equal(tc.wantTheme, loaded.Web.Theme)
 			require.True(loaded.Vector.Embeddings.LocalOnly)
+			choice, err = embedlocal.ChoiceRecorded()
+			require.NoError(err)
+			require.True(choice)
 		})
 	}
 }
@@ -634,4 +642,116 @@ func TestLocalEmbeddingsFirstOllamaActivationRetriesAfterCredentialRepair(t *tes
 	results, _, err := f.handle.vf.HybridEngine.Search(f.ctx, hybrid.SearchRequest{Mode: hybrid.ModeVector, FreeText: "orchard", Limit: 5})
 	require.NoError(t, err)
 	assert.Len(t, results, 1)
+}
+
+func TestLocalEmbeddingsStartupSharedChoice(t *testing.T) {
+	f := newLocalActivationFixture(t, "")
+	require.NoError(t, embedlocal.RecordChoice())
+	f.ollamaTags = true
+	f.start(t)
+	f.server.SetLocalEmbeddings(f.controller)
+	f.controller.StartFromChoice()
+	require.Eventually(t, func() bool { return f.inputs.Load() > 0 }, 15*time.Second, 20*time.Millisecond)
+	snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+	require.NoError(t, err)
+	loaded, err := f.cfg.ReloadConfigFile(snapshot)
+	require.NoError(t, err)
+	assert.True(t, loaded.Vector.Enabled)
+	assert.True(t, loaded.Vector.Embeddings.LocalOnly)
+}
+
+func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
+	for _, tc := range []struct {
+		name                                          string
+		enabled, local, choice, wantBuild, wantChoice bool
+	}{
+		{name: "enabled builtin", enabled: true, local: true, wantBuild: true, wantChoice: true},
+		{name: "disabled builtin", local: true},
+		{name: "disabled builtin with choice", local: true, choice: true, wantChoice: true},
+		{name: "configured provider", enabled: true, choice: true, wantChoice: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLocalActivationFixture(t, "nomic-embed-text")
+			if tc.choice {
+				require.NoError(t, embedlocal.RecordChoice())
+			}
+			snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+			require.NoError(t, err)
+			_, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{
+				{Path: []string{"vector"}, Values: map[string]any{"enabled": tc.enabled}},
+				{Path: []string{"vector", "embeddings"}, Values: map[string]any{"local_only": tc.local}},
+			})
+			require.NoError(t, err)
+			snapshot, err = config.ReadConfigFile(f.cfg.ConfigFilePath())
+			require.NoError(t, err)
+			f.cfg.Vector.Enabled = tc.enabled
+			f.cfg.Vector.Embeddings.LocalOnly = tc.local
+			f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+			require.True(t, f.handle.WaitTimeout(5*time.Second))
+			f.controller.handle = f.handle
+			f.server.SetLocalEmbeddings(f.controller)
+			f.controller.StartFromChoice()
+			if tc.wantBuild {
+				require.Eventually(t, func() bool { return f.inputs.Load() > 0 }, 15*time.Second, 20*time.Millisecond)
+			} else {
+				assert.Equal(t, int32(0), f.inputs.Load())
+			}
+			choice, err := embedlocal.ChoiceRecorded()
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantChoice, choice)
+			after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+			require.NoError(t, err)
+			if !tc.wantBuild {
+				assert.Equal(t, snapshot.ETag, after.ETag)
+			}
+		})
+	}
+}
+
+func TestLocalEmbeddingsStartupKeepsActiveIndex(t *testing.T) {
+	f := newLocalActivationFixture(t, "nomic-embed-text")
+	f.useBuiltin(t)
+	f.start(t)
+	before := len(f.runner.calls)
+	f.server.SetLocalEmbeddings(f.controller)
+	f.controller.StartFromChoice()
+	require.Eventually(t, func() bool {
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
+		request.Header.Set("Authorization", "Bearer owner")
+		response := httptest.NewRecorder()
+		f.server.Router().ServeHTTP(response, request)
+		var status api.LocalEmbeddingsStatus
+		return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && !status.Running && status.Error == ""
+	}, 5*time.Second, 20*time.Millisecond)
+	assert.Len(t, f.runner.calls, before)
+	choice, err := embedlocal.ChoiceRecorded()
+	require.NoError(t, err)
+	assert.True(t, choice)
+}
+
+func TestLocalEmbeddingsStartupKeepsBuildingIndex(t *testing.T) {
+	f := newLocalActivationFixture(t, "nomic-embed-text")
+	f.useBuiltin(t)
+	f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+	require.True(t, f.handle.WaitTimeout(5*time.Second))
+	f.controller.handle = f.handle
+	require.NotNil(t, f.handle.vf)
+	backend := f.handle.vf.Backend
+	id, err := backend.CreateGeneration(f.ctx, "another-model", 768, "another-recipe")
+	require.NoError(t, err)
+	f.server.SetLocalEmbeddings(f.controller)
+	f.controller.StartFromChoice()
+	require.Eventually(t, func() bool {
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
+		request.Header.Set("Authorization", "Bearer owner")
+		response := httptest.NewRecorder()
+		f.server.Router().ServeHTTP(response, request)
+		var status api.LocalEmbeddingsStatus
+		return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && !status.Running && status.Error == ""
+	}, 5*time.Second, 20*time.Millisecond)
+	building, err := backend.BuildingGeneration(f.ctx)
+	require.NoError(t, err)
+	require.NotNil(t, building)
+	assert.Equal(t, id, building.ID)
+	assert.Empty(t, f.runner.calls)
 }

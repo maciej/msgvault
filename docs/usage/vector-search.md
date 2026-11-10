@@ -55,6 +55,9 @@ builds the message index, and enables semantic search in the running daemon.
 The row shows download and indexing progress. You can close the page while it
 runs and keep using keyword search.
 
+If you turned on the built-in server in another app, MsgVault starts its
+message index the next time its daemon starts. The same row shows progress.
+
 If Ollama already serves `nomic-embed-text`, Turn on uses it. An existing
 Ollama configuration stays on Ollama.
 When the browser uses a remote address, the download line names the daemon host.

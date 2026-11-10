@@ -1011,6 +1011,13 @@ func runSetupProviders(command *cobra.Command, deps setupProvidersDeps, options 
 	if err := applySetupProvidersPlan(command, deps, before, &plan, options.jsonOutput); err != nil {
 		return err
 	}
+	for _, lane := range plan.Lanes {
+		if lane.Lane == laneTextSearch && lane.local && lane.Action == planActionEnable {
+			if err := embedlocal.RecordChoice(); err != nil {
+				return fmt.Errorf("record local search choice: %w", err)
+			}
+		}
+	}
 	return writeSetupProvidersResult(command, deps, nil, &plan, options, plan.writes(), declined)
 }
 

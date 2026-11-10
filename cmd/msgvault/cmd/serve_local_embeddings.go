@@ -100,7 +100,65 @@ func isOllamaEmbeddingEndpoint(ctx context.Context, endpoint string) bool {
 	return embeddingProviderName(endpoint) == "local" && probeOllamaServer(ctx, server).Catalog
 }
 
+// StartFromChoice queues first-time setup when a saved choice permits it.
+func (c *localEmbeddingsController) StartFromChoice() {
+	snapshot, err := config.ReadConfigFile(c.state.cfg.ConfigFilePath())
+	if err != nil {
+		c.state.logger.Warn("read local search settings", "error", err)
+		return
+	}
+	loaded, err := c.state.cfg.ReloadConfigFile(snapshot)
+	if err != nil {
+		c.state.logger.Warn("read local search settings", "error", err)
+		return
+	}
+	cfg := loaded.Vector
+	saved := cfg.Enabled && cfg.Embeddings.LocalOnly && cfg.Embeddings.Validate() == nil
+	configured := cfg.Enabled || cfg.Embeddings.LocalOnly || cfg.Embeddings.Endpoint != "" || cfg.Embeddings.Model != ""
+	choice, err := embedlocal.ChoiceRecorded()
+	if err != nil {
+		c.state.logger.Warn("read local search choice", "error", err)
+		return
+	}
+	if saved && !choice {
+		if err := embedlocal.RecordChoice(); err != nil {
+			c.state.logger.Warn("record local search choice", "error", err)
+		}
+	}
+	if !saved && (configured || !choice) {
+		return
+	}
+	c.server.StartLocalEmbeddings(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
+		if !c.handle.WaitContext(ctx) {
+			return ctx.Err()
+		}
+		if saved {
+			c.handle.mu.Lock()
+			live := c.handle.vf
+			c.handle.mu.Unlock()
+			if live != nil {
+				_, err := live.Backend.ActiveGeneration(ctx)
+				if err == nil {
+					return nil
+				}
+				if !errors.Is(err, vector.ErrNoActiveGeneration) {
+					return err
+				}
+				building, err := live.Backend.BuildingGeneration(ctx)
+				if err != nil || building != nil {
+					return err
+				}
+			}
+		}
+		return c.enable(ctx, report, true, saved)
+	})
+}
+
 func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.LocalEmbeddingsStatus)) (result error) {
+	return c.enable(ctx, report, false, false)
+}
+
+func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.LocalEmbeddingsStatus), forceBuiltin, saved bool) (result error) {
 	// Bound accepted setup work independently of the HTTP request.
 	runtimeCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
@@ -120,6 +178,16 @@ func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.
 	if err != nil {
 		return err
 	}
+	if forceBuiltin {
+		cfg := loaded.Vector
+		if saved {
+			if !cfg.Enabled || !cfg.Embeddings.LocalOnly || cfg.Embeddings.Validate() != nil {
+				return nil
+			}
+		} else if cfg.Enabled || cfg.Embeddings.LocalOnly || cfg.Embeddings.Endpoint != "" || cfg.Embeddings.Model != "" {
+			return nil
+		}
+	}
 	dir, err := localEmbeddingsDir()
 	if err != nil {
 		return err
@@ -131,7 +199,7 @@ func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.
 	deps := defaultSetupProvidersDeps(ctx)
 	deps.lookupEnv = func(string) (string, bool) { return "", false }
 	deps.localEndpoint = localEmbeddingEndpoint
-	detection := detectSetupProviders(ctx, loaded, deps, setupProvidersOptions{localEmbeddings: !loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly})
+	detection := detectSetupProviders(ctx, loaded, deps, setupProvidersOptions{localEmbeddings: forceBuiltin || (!loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly)})
 	detection.configKeys = configKeys
 	lane := planTextSearch(loaded, detection)
 	if lane.Action == planActionKeep {
@@ -141,6 +209,9 @@ func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.
 	}
 	if lane.Action != planActionEnable {
 		return errors.New(lane.Reason)
+	}
+	if saved {
+		lane.edits = nil
 	}
 	candidate, err := config.PreviewConfigTableEdits(snapshot, lane.edits)
 	if err != nil {
@@ -240,6 +311,11 @@ func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.
 		publishVisualVectorFeatures(c.store, c.server, c.scheduler, vf, &state)
 	}
 	defer func() { result = errors.Join(result, publicationErr) }()
+	if lane.local {
+		if err := embedlocal.RecordChoice(); err != nil {
+			return fmt.Errorf("record local search choice: %w", err)
+		}
+	}
 	releaseGate()
 	releaseGate = func() {}
 

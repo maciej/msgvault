@@ -61,7 +61,12 @@ func TestLocalEmbeddingsJobLifecycle(t *testing.T) {
 				}
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
-				must.Equal(http.StatusAccepted, post(ctx).Code)
+				if behavior == "admission" || behavior == "shutdown join" {
+					_, err := srv.StartLocalEmbeddings(controller.Enable)
+					must.NoError(err)
+				} else {
+					must.Equal(http.StatusAccepted, post(ctx).Code)
+				}
 				jobCtx := <-controller.started
 				synctest.Wait()
 				switch behavior {

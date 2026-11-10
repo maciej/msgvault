@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -76,25 +77,35 @@ func (s *Server) handleGetLocalEmbeddings(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleEnableLocalEmbeddings(w http.ResponseWriter, r *http.Request) {
+	status, err := s.StartLocalEmbeddings(nil)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, status)
+}
+
+// StartLocalEmbeddings starts a setup job shared by startup and the API.
+// A nil enable function uses the registered controller.
+func (s *Server) StartLocalEmbeddings(enable func(context.Context, func(LocalEmbeddingsStatus)) error) (LocalEmbeddingsStatus, error) {
 	s.importMu.Lock()
 	if s.localEmbeddings == nil || s.importsClosed {
 		s.importMu.Unlock()
-		writeError(w, http.StatusServiceUnavailable, "unavailable", "Local search setup is unavailable")
-		return
+		return LocalEmbeddingsStatus{}, errors.New("Local search setup is unavailable") //nolint:revive,staticcheck // Displayed in the API response.
 	}
 	if s.localSetup.Running {
 		status := s.localSetup
 		s.importMu.Unlock()
-		writeJSON(w, http.StatusAccepted, status)
-		return
+		return status, nil
 	}
 	finishIdle, ok := s.idleTracker.BeginWork()
 	if !ok {
 		s.importMu.Unlock()
-		writeError(w, http.StatusServiceUnavailable, "unavailable", "The daemon is stopping")
-		return
+		return LocalEmbeddingsStatus{}, errors.New("The daemon is stopping") //nolint:revive,staticcheck // Displayed in the API response.
 	}
-	controller := s.localEmbeddings
+	if enable == nil {
+		enable = s.localEmbeddings.Enable
+	}
 	s.localSetup = LocalEmbeddingsStatus{Phase: "idle", Running: true}
 	status := s.localSetup
 	s.importWG.Add(1)
@@ -108,7 +119,7 @@ func (s *Server) handleEnableLocalEmbeddings(w http.ResponseWriter, r *http.Requ
 			s.localSetup = status
 			s.importMu.Unlock()
 		}
-		err := controller.Enable(s.importContext, report)
+		err := enable(s.importContext, report)
 		s.importMu.Lock()
 		s.localSetup.Running = false
 		s.localSetup.Phase = "idle"
@@ -117,5 +128,5 @@ func (s *Server) handleEnableLocalEmbeddings(w http.ResponseWriter, r *http.Requ
 		}
 		s.importMu.Unlock()
 	}()
-	writeJSON(w, http.StatusAccepted, status)
+	return status, nil
 }
