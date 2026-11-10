@@ -755,3 +755,23 @@ func TestLocalEmbeddingsStartupKeepsBuildingIndex(t *testing.T) {
 	assert.Equal(t, id, building.ID)
 	assert.Empty(t, f.runner.calls)
 }
+
+func TestLocalEmbeddingsStartupSavedBuiltinWithAvailableServer(t *testing.T) {
+	f := newLocalActivationFixture(t, "nomic-embed-text")
+	f.useBuiltin(t)
+	f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+	require.True(t, f.handle.WaitTimeout(5*time.Second))
+	f.controller.handle = f.handle
+	require.NotNil(t, f.handle.vf)
+	backend := f.handle.vf.Backend
+	_, err := backend.ActiveGeneration(f.ctx)
+	require.ErrorIs(t, err, vector.ErrNoActiveGeneration)
+	require.Zero(t, f.inputs.Load())
+	f.server.SetLocalEmbeddings(f.controller)
+	f.controller.StartFromChoice()
+	require.Eventually(t, func() bool {
+		_, err := backend.ActiveGeneration(f.ctx)
+		return err == nil
+	}, 15*time.Second, 20*time.Millisecond)
+	assert.Positive(t, f.inputs.Load())
+}
