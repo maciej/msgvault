@@ -1308,6 +1308,9 @@ func TestSetupProvidersDoesNotRecordChoiceAfterFailedSetup(t *testing.T) {
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
 			command.SetIn(strings.NewReader("yes\n"))
+			if failure == "install" {
+				command.SetArgs([]string{"--local-embeddings"})
+			}
 			err := command.ExecuteContext(t.Context())
 			if failure == "config" {
 				require.ErrorContains(t, err, "config write failed")

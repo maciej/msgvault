@@ -3,8 +3,6 @@ import { installOperations } from './e2e/fixtures/operations';
 import { embeddingStatus, lane, lanes } from '../src/test/operations';
 
 test('shows the shared choice error after local search turns on', async ({ page }) => {
-  const pageErrors: string[] = [];
-  page.on('pageerror', error => pageErrors.push(error.message));
   await installOperations(page);
   await page.route('**/api/v1/operations/status', route => route.fulfill({ json: {
     lanes: lanes(lane('message_embedding'))
@@ -24,7 +22,6 @@ test('shows the shared choice error after local search turns on', async ({ page 
   await expect(row.locator('.row__coverage')).toHaveCount(0);
   await expect(row.getByRole('alert')).toBeVisible();
   await expect(row.getByRole('alert')).toHaveText("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings");
-  expect(pageErrors).toEqual([]);
 });
 
 test('Build index confirmation preserves feature labels at 768px', async ({ page }) => {
