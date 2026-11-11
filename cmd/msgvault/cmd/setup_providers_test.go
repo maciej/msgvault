@@ -1246,33 +1246,57 @@ func TestSetupProvidersRejectsExplicitProviderWhenSweepEnabled(t *testing.T) {
 
 func TestSetupProvidersLocalDownloadTransaction(t *testing.T) {
 	for _, tc := range []struct {
-		name, input  string
-		args         []string
-		tty, enabled bool
+		name, input, failure string
+		args                 []string
+		tty, enabled         bool
 	}{
 		{name: "accept", tty: true, input: "yes\n", enabled: true},
 		{name: "decline", tty: true, input: "no\n"},
 		{name: "implicit nonterminal", args: []string{"--yes", "--json"}},
 		{name: "yes alone", tty: true, args: []string{"--yes"}},
 		{name: "explicit yes", args: []string{"--local-embeddings", "--yes"}, enabled: true},
+		{name: "install failure", tty: true, input: "yes\n", args: []string{"--local-embeddings"}, failure: "install"},
+		{name: "config write failure", tty: true, input: "yes\n", failure: "config"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert, require := assert.New(t), require.New(t)
 			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 			fixture.tty, fixture.confirm = tc.tty, true
-			command := newSetupProvidersCommand(fixture.deps(t))
+			deps := fixture.deps(t)
+			switch tc.failure {
+			case "install":
+				deps.localInstall = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
+					approved, err := opts.Confirm(ctx, 295000000)
+					require.NoError(err)
+					require.True(approved)
+					return embedlocal.Installation{}, errors.New("installation failed")
+				}
+			case "config":
+				deps.editConfigTables = func(string, []config.TableEdit) (config.ConfigFile, error) {
+					return config.ConfigFile{}, errors.New("config write failed")
+				}
+			}
+			command := newSetupProvidersCommand(deps)
 			var output bytes.Buffer
 			command.SetOut(&output)
 			command.SetErr(io.Discard)
 			command.SetIn(strings.NewReader(tc.input))
 			command.SetArgs(tc.args)
-			require.NoError(command.ExecuteContext(t.Context()), output.String())
-			loaded := fixture.load(t)
-			assert.Equal(tc.enabled, loaded.Vector.Enabled)
-			assert.Equal(tc.enabled, loaded.Vector.Embeddings.LocalOnly)
+			err := command.ExecuteContext(t.Context())
+			if tc.failure == "config" {
+				require.ErrorContains(err, "config write failed")
+			} else {
+				require.NoError(err, output.String())
+			}
 			choice, err := embedlocal.ChoiceRecorded()
 			require.NoError(err)
 			assert.Equal(tc.enabled, choice)
+			if tc.failure == "config" {
+				return
+			}
+			loaded := fixture.load(t)
+			assert.Equal(tc.enabled, loaded.Vector.Enabled)
+			assert.Equal(tc.enabled, loaded.Vector.Embeddings.LocalOnly)
 			assert.Equal(tc.enabled, loaded.Vector.People.Enabled)
 			if !tc.enabled {
 				assert.Contains(output.String(), "msgvault setup providers --local-embeddings")
@@ -1282,44 +1306,6 @@ func TestSetupProvidersLocalDownloadTransaction(t *testing.T) {
 					assert.Equal(laneStatePending, findLane(t, result.Report, laneTextSearch).State)
 				}
 			}
-		})
-	}
-}
-
-func TestSetupProvidersDoesNotRecordChoiceAfterFailedSetup(t *testing.T) {
-	for _, failure := range []string{"install", "config"} {
-		t.Run(failure, func(t *testing.T) {
-			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
-			fixture.tty, fixture.confirm = true, true
-			deps := fixture.deps(t)
-			if failure == "install" {
-				deps.localInstall = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
-					approved, err := opts.Confirm(ctx, 295000000)
-					require.NoError(t, err)
-					require.True(t, approved)
-					return embedlocal.Installation{}, errors.New("installation failed")
-				}
-			} else {
-				deps.editConfigTables = func(string, []config.TableEdit) (config.ConfigFile, error) {
-					return config.ConfigFile{}, errors.New("config write failed")
-				}
-			}
-			command := newSetupProvidersCommand(deps)
-			command.SetOut(io.Discard)
-			command.SetErr(io.Discard)
-			command.SetIn(strings.NewReader("yes\n"))
-			if failure == "install" {
-				command.SetArgs([]string{"--local-embeddings"})
-			}
-			err := command.ExecuteContext(t.Context())
-			if failure == "config" {
-				require.ErrorContains(t, err, "config write failed")
-			} else {
-				require.NoError(t, err)
-			}
-			choice, err := embedlocal.ChoiceRecorded()
-			require.NoError(t, err)
-			assert.False(t, choice)
 		})
 	}
 }
@@ -1449,26 +1435,27 @@ training_posture = "declared"
 func TestSetupProvidersReusesDiscoveredLocalServer(t *testing.T) {
 	for _, args := range [][]string{nil, {"--local-embeddings"}} {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
+			assert, require := assert.New(t), require.New(t)
 			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 			deps := fixture.deps(t)
 			deps.localEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				return "http://127.0.0.1:54321/v1", nil
 			}
 			deps.localInstall = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				assert.Fail(t, "a discovered server needs no installation or download")
+				assert.Fail("a discovered server needs no installation or download")
 				return embedlocal.Installation{}, errors.New("unexpected installation")
 			}
 			command := newSetupProvidersCommand(deps)
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
 			command.SetArgs(args)
-			require.NoError(t, command.ExecuteContext(t.Context()))
+			require.NoError(command.ExecuteContext(t.Context()))
 			loaded := fixture.load(t)
-			assert.True(t, loaded.Vector.Enabled)
-			assert.True(t, loaded.Vector.Embeddings.LocalOnly)
+			assert.True(loaded.Vector.Enabled)
+			assert.True(loaded.Vector.Embeddings.LocalOnly)
 			choice, err := embedlocal.ChoiceRecorded()
-			require.NoError(t, err)
-			assert.Equal(t, len(args) > 0, choice)
+			require.NoError(err)
+			assert.Equal(len(args) > 0, choice)
 		})
 	}
 }
