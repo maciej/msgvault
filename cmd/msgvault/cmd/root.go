@@ -45,8 +45,7 @@ Start here:
 
 Output:
   --json: JSON stdout (export-messages: JSON Lines). Logs/progress: stderr.
-  --log-level=warn quiets logs. Exit: 0 success, 1 error, 130 interrupted.
-  More: msgvault quickstart.`,
+  --log-level=warn quiets logs. Exit: 0 success, 1 error, 130 interrupted.`,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			inv := prepareInvocation(cmd)
 			if inv == nil {
