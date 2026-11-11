@@ -1456,19 +1456,18 @@ func TestSetupProvidersDefaultOllamaProbeSelection(t *testing.T) {
 }
 
 func TestSetupProvidersRetriesRecordingLocalChoice(t *testing.T) {
-	assert, require := assert.New(t), require.New(t)
 	fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 	dir, err := embedlocal.DefaultDir()
-	require.NoError(err)
+	require.NoError(t, err)
 	marker := filepath.Join(dir, "search-by-meaning")
-	require.NoError(os.MkdirAll(marker, 0o700))
+	require.NoError(t, os.MkdirAll(marker, 0o700))
 	_, err = fixture.run(t, "providers", "--local-embeddings", "--yes")
-	require.ErrorContains(err, "record local search choice")
-	assert.True(fixture.load(t).Vector.Embeddings.LocalOnly)
-	require.NoError(os.Remove(marker))
+	require.ErrorContains(t, err, "record local search choice")
+	assert.True(t, fixture.load(t).Vector.Embeddings.LocalOnly)
+	require.NoError(t, os.Remove(marker))
 	_, err = fixture.run(t, "providers", "--local-embeddings", "--yes")
-	require.NoError(err)
+	require.NoError(t, err)
 	choice, err := embedlocal.ChoiceRecorded()
-	require.NoError(err)
-	assert.True(choice)
+	require.NoError(t, err)
+	assert.True(t, choice)
 }
