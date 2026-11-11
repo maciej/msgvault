@@ -12,7 +12,7 @@ test('shows the shared choice error after local search turns on', async ({ page 
   await page.route('**/api/v1/embeddings/local', route => route.fulfill({ json: {
     host: 'archive.example.test', enabled: true, provider: 'builtin', phase: 'idle',
     download_bytes: 0, done_bytes: 0, total_bytes: 0,
-    error: "Shared choice wasn't saved. Run msgvault setup providers --local-embeddings."
+    error: "Shared choice wasn't saved. Run msgvault setup providers --local-embeddings"
   } }));
   await page.route('**/api/v1/search/coverage', route => route.fulfill({ json: {
     eligible_count: 10, embedded_count: 10, percentage: 100, cache_revision: 'cache-1',
@@ -23,7 +23,7 @@ test('shows the shared choice error after local search turns on', async ({ page 
   await expect(row.getByText('On', { exact: true })).toBeVisible();
   await expect(row.locator('.row__coverage')).toHaveCount(0);
   await expect(row.getByRole('alert')).toBeVisible();
-  await expect(row.getByRole('alert')).toHaveText("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings.");
+  await expect(row.getByRole('alert')).toHaveText("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings");
   expect(pageErrors).toEqual([]);
 });
 

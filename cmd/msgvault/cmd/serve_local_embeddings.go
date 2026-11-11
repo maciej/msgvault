@@ -320,7 +320,7 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if lane.local && !forceBuiltin {
 		if err := embedlocal.RecordChoice(); err != nil {
 			c.state.logger.Warn("record local search choice", "error", err)
-			choiceErr = errors.New("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings.") //nolint:revive,staticcheck // Displayed in Settings.
+			choiceErr = errors.New("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings") //nolint:revive,staticcheck // Displayed in Settings.
 		}
 	}
 	releaseGate()
