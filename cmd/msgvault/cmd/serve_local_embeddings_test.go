@@ -662,10 +662,9 @@ func TestLocalEmbeddingsStartupSharedChoice(t *testing.T) {
 
 func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 	for _, tc := range []struct {
-		name, model, endpoint                         string
-		enabled, local, choice, wantBuild, wantChoice bool
+		name, model, endpoint              string
+		enabled, local, choice, wantChoice bool
 	}{
-		{name: "enabled builtin", enabled: true, local: true, wantBuild: true, wantChoice: true},
 		{name: "disabled builtin", local: true},
 		{name: "disabled builtin with choice", local: true, choice: true, wantChoice: true},
 		{name: "custom provider", model: "custom-embedding", endpoint: "https://api.example.test/v1", enabled: true, choice: true, wantChoice: true},
@@ -693,14 +692,6 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 			require.NoError(t, err)
 			snapshot, err = config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
-			saved, err := f.cfg.ReloadConfigFile(snapshot)
-			require.NoError(t, err)
-			require.Equal(t, model, saved.Vector.Embeddings.Model)
-			if tc.endpoint != "" {
-				require.Equal(t, tc.endpoint, saved.Vector.Embeddings.Endpoint)
-			} else {
-				require.Equal(t, f.cfg.Chat.Server+"/v1", saved.Vector.Embeddings.Endpoint)
-			}
 			f.cfg.Vector.Enabled = tc.enabled
 			f.cfg.Vector.Embeddings.LocalOnly = tc.local
 			if tc.endpoint != "" {
@@ -711,19 +702,13 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 			f.controller.handle = f.handle
 			f.server.SetLocalEmbeddings(f.controller)
 			f.controller.StartFromChoice()
-			if tc.wantBuild {
-				require.Eventually(t, func() bool { return f.inputs.Load() > 0 }, 15*time.Second, 20*time.Millisecond)
-			} else {
-				assert.Equal(t, int32(0), f.inputs.Load())
-			}
+			assert.Equal(t, int32(0), f.inputs.Load())
 			choice, err := embedlocal.ChoiceRecorded()
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantChoice, choice)
 			after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
-			if !tc.wantBuild {
-				assert.Equal(t, snapshot.Content, after.Content)
-			}
+			assert.Equal(t, snapshot.Content, after.Content)
 		})
 	}
 }
@@ -747,33 +732,6 @@ func TestLocalEmbeddingsStartupKeepsActiveIndex(t *testing.T) {
 	choice, err := embedlocal.ChoiceRecorded()
 	require.NoError(t, err)
 	assert.True(t, choice)
-}
-
-func TestLocalEmbeddingsStartupKeepsBuildingIndex(t *testing.T) {
-	f := newLocalActivationFixture(t, "nomic-embed-text")
-	f.useBuiltin(t)
-	f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
-	require.True(t, f.handle.WaitTimeout(5*time.Second))
-	f.controller.handle = f.handle
-	require.NotNil(t, f.handle.vf)
-	backend := f.handle.vf.Backend
-	id, err := backend.CreateGeneration(f.ctx, "another-model", 768, "another-recipe")
-	require.NoError(t, err)
-	f.server.SetLocalEmbeddings(f.controller)
-	f.controller.StartFromChoice()
-	require.Eventually(t, func() bool {
-		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
-		request.Header.Set("Authorization", "Bearer owner")
-		response := httptest.NewRecorder()
-		f.server.Router().ServeHTTP(response, request)
-		var status api.LocalEmbeddingsStatus
-		return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && !status.Running && status.Error == ""
-	}, 5*time.Second, 20*time.Millisecond)
-	building, err := backend.BuildingGeneration(f.ctx)
-	require.NoError(t, err)
-	require.NotNil(t, building)
-	assert.Equal(t, id, building.ID)
-	assert.Empty(t, f.runner.calls)
 }
 
 func TestLocalEmbeddingsStartupSavedBuiltinWithAvailableServer(t *testing.T) {

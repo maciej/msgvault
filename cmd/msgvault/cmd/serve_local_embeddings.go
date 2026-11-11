@@ -144,10 +144,6 @@ func (c *localEmbeddingsController) StartFromChoice() {
 				if !errors.Is(err, vector.ErrNoActiveGeneration) {
 					return err
 				}
-				building, err := live.Backend.BuildingGeneration(ctx)
-				if err != nil || building != nil {
-					return err
-				}
 			}
 		}
 		return c.enable(ctx, report, true, saved)
