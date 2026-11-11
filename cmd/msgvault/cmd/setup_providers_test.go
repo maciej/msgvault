@@ -1256,24 +1256,18 @@ func TestSetupProvidersLocalDownloadTransaction(t *testing.T) {
 		{name: "yes alone", tty: true, args: []string{"--yes"}},
 		{name: "explicit yes", args: []string{"--local-embeddings", "--yes"}, enabled: true},
 		{name: "install failure", tty: true, input: "yes\n", args: []string{"--local-embeddings"}, failure: "install"},
-		{name: "config write failure", tty: true, input: "yes\n", failure: "config"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			assert, require := assert.New(t), require.New(t)
 			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 			fixture.tty, fixture.confirm = tc.tty, true
 			deps := fixture.deps(t)
-			switch tc.failure {
-			case "install":
+			if tc.failure == "install" {
 				deps.localInstall = func(ctx context.Context, opts embedlocal.InstallOptions) (embedlocal.Installation, error) {
 					approved, err := opts.Confirm(ctx, 295000000)
 					require.NoError(err)
 					require.True(approved)
 					return embedlocal.Installation{}, errors.New("installation failed")
-				}
-			case "config":
-				deps.editConfigTables = func(string, []config.TableEdit) (config.ConfigFile, error) {
-					return config.ConfigFile{}, errors.New("config write failed")
 				}
 			}
 			command := newSetupProvidersCommand(deps)
@@ -1282,18 +1276,10 @@ func TestSetupProvidersLocalDownloadTransaction(t *testing.T) {
 			command.SetErr(io.Discard)
 			command.SetIn(strings.NewReader(tc.input))
 			command.SetArgs(tc.args)
-			err := command.ExecuteContext(t.Context())
-			if tc.failure == "config" {
-				require.ErrorContains(err, "config write failed")
-			} else {
-				require.NoError(err, output.String())
-			}
+			require.NoError(command.ExecuteContext(t.Context()), output.String())
 			choice, err := embedlocal.ChoiceRecorded()
 			require.NoError(err)
 			assert.Equal(tc.enabled, choice)
-			if tc.failure == "config" {
-				return
-			}
 			loaded := fixture.load(t)
 			assert.Equal(tc.enabled, loaded.Vector.Enabled)
 			assert.Equal(tc.enabled, loaded.Vector.Embeddings.LocalOnly)

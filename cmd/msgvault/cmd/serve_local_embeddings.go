@@ -143,8 +143,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		if err != nil {
 			return err
 		}
-		if !loaded.Vector.Enabled || loaded.Vector.Embeddings != cfg.Embeddings ||
-			loaded.Vector.Backend != cfg.Backend || loaded.Vector.DBPath != cfg.DBPath {
+		if !loaded.Vector.Enabled || loaded.Vector.Embeddings != cfg.Embeddings {
 			return nil
 		}
 		c.handle.mu.Lock()
@@ -160,9 +159,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		if !errors.Is(err, vector.ErrNoActiveGeneration) {
 			return err
 		}
-		state := *c.state
-		state.cfg = loaded
-		return c.buildIndex(withInvocation(ctx, &state), live, report)
+		return c.buildIndex(withInvocation(ctx, c.state), live, report)
 	})
 	if err != nil {
 		c.state.logger.Warn("start local search setup", "error", err)
@@ -320,7 +317,7 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if lane.local && !forceBuiltin {
 		if err := embedlocal.RecordChoice(); err != nil {
 			c.state.logger.Warn("record local search choice", "error", err)
-			choiceErr = errors.New("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings") //nolint:staticcheck // Displayed in Settings.
+			choiceErr = errors.New("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings to save it") //nolint:staticcheck // Displayed in Settings.
 		}
 	}
 	releaseGate()

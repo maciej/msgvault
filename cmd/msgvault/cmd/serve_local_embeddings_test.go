@@ -695,11 +695,6 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 				{Path: []string{"vector", "embeddings"}, Values: embeddings},
 			})
 			require.NoError(t, err)
-			f.cfg.Vector.Enabled = tc.enabled
-			f.cfg.Vector.Embeddings.LocalOnly = tc.local
-			if tc.endpoint != "" {
-				f.cfg.Vector.Embeddings.Endpoint = tc.endpoint
-			}
 			f.handle = &vectorInitHandle{done: make(chan struct{})}
 			f.controller.handle = f.handle
 			f.server.SetLocalEmbeddings(f.controller)
