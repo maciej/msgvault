@@ -204,10 +204,14 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if err != nil {
 		return fmt.Errorf("read local search settings: %w", err)
 	}
+	c.handle.mu.Lock()
+	live := c.handle.vf
+	c.handle.mu.Unlock()
+	restoreSaved := !forceBuiltin && live == nil && loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly && loaded.Vector.Embeddings.Validate() == nil
 	deps := defaultSetupProvidersDeps(ctx)
 	deps.lookupEnv = func(string) (string, bool) { return "", false }
 	deps.localEndpoint = localEmbeddingEndpoint
-	detection := detectSetupProviders(ctx, loaded, deps, setupProvidersOptions{localEmbeddings: forceBuiltin || (!loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly)})
+	detection := detectSetupProviders(ctx, loaded, deps, setupProvidersOptions{localEmbeddings: forceBuiltin || restoreSaved || (!loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly)})
 	detection.configKeys = configKeys
 	lane := planTextSearch(loaded, detection)
 	if lane.Action == planActionKeep {
@@ -218,6 +222,9 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if lane.Action != planActionEnable {
 		return errors.New(lane.Reason)
 	}
+	if restoreSaved {
+		lane.edits = nil
+	}
 	candidate, err := config.PreviewConfigTableEdits(snapshot, lane.edits)
 	if err != nil {
 		return err
@@ -226,9 +233,6 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if err != nil {
 		return err
 	}
-	c.handle.mu.Lock()
-	live := c.handle.vf
-	c.handle.mu.Unlock()
 	if nextConfig.DatabaseDSN() != c.dbPath || nextConfig.Data.DataDir != c.state.cfg.Data.DataDir ||
 		(live != nil && nextConfig.Vector.DBPath != live.Cfg.DBPath) {
 		return errors.New("Restart msgvault to use the new storage settings.") //nolint:revive,staticcheck // Displayed directly as a recovery message in Settings.
