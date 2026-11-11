@@ -57,7 +57,9 @@ runs and keep using keyword search.
 
 If you turned on the built-in server in another app, MsgVault starts its message
 index at the next daemon start when no provider is configured. The same row shows
-progress. An existing provider stays selected.
+progress. An existing provider stays selected. If MsgVault already has the
+built-in server enabled and its files are installed, it starts the first index
+when the daemon starts.
 
 If Ollama already serves `nomic-embed-text`, Turn on uses it. An existing
 Ollama configuration stays on Ollama.

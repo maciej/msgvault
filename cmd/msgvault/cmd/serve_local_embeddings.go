@@ -115,38 +115,54 @@ func (c *localEmbeddingsController) StartFromChoice() {
 	cfg := loaded.Vector
 	saved := cfg.Enabled && cfg.Embeddings.LocalOnly && cfg.Embeddings.Validate() == nil
 	configured := cfg.Enabled || cfg.Embeddings.LocalOnly || cfg.Embeddings.Endpoint != "" || cfg.Embeddings.Model != ""
-	choice, err := embedlocal.ChoiceRecorded()
-	if err != nil {
-		c.state.logger.Warn("read local search choice", "error", err)
-		return
-	}
-	if saved && !choice {
-		if err := embedlocal.RecordChoice(); err != nil {
-			c.state.logger.Warn("record local search choice", "error", err)
+	if !saved {
+		if configured {
+			return
 		}
-	}
-	if !saved && (configured || !choice) {
-		return
+		choice, err := embedlocal.ChoiceRecorded()
+		if err != nil {
+			c.state.logger.Warn("read local search choice", "error", err)
+			return
+		}
+		if !choice {
+			return
+		}
 	}
 	_, err = c.server.StartLocalEmbeddings(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
 		if !c.handle.WaitContext(ctx) {
 			return ctx.Err()
 		}
-		if saved {
-			c.handle.mu.Lock()
-			live := c.handle.vf
-			c.handle.mu.Unlock()
-			if live != nil {
-				_, err := live.Backend.ActiveGeneration(ctx)
-				if err == nil {
-					return nil
-				}
-				if !errors.Is(err, vector.ErrNoActiveGeneration) {
-					return err
-				}
-			}
+		if !saved {
+			return c.enable(ctx, report, true)
 		}
-		return c.enable(ctx, report, true, saved)
+		snapshot, err := config.ReadConfigFile(c.state.cfg.ConfigFilePath())
+		if err != nil {
+			return err
+		}
+		loaded, err := c.state.cfg.ReloadConfigFile(snapshot)
+		if err != nil {
+			return err
+		}
+		if !loaded.Vector.Enabled || loaded.Vector.Embeddings != cfg.Embeddings ||
+			loaded.Vector.Backend != cfg.Backend || loaded.Vector.DBPath != cfg.DBPath {
+			return nil
+		}
+		c.handle.mu.Lock()
+		live := c.handle.vf
+		c.handle.mu.Unlock()
+		if live == nil {
+			return nil
+		}
+		_, err = live.Backend.ActiveGeneration(ctx)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, vector.ErrNoActiveGeneration) {
+			return err
+		}
+		state := *c.state
+		state.cfg = loaded
+		return c.buildIndex(withInvocation(ctx, &state), live, report)
 	})
 	if err != nil {
 		c.state.logger.Warn("start local search setup", "error", err)
@@ -154,10 +170,10 @@ func (c *localEmbeddingsController) StartFromChoice() {
 }
 
 func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.LocalEmbeddingsStatus)) (result error) {
-	return c.enable(ctx, report, false, false)
+	return c.enable(ctx, report, false)
 }
 
-func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.LocalEmbeddingsStatus), forceBuiltin, saved bool) (result error) {
+func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.LocalEmbeddingsStatus), forceBuiltin bool) (result error) {
 	// Bound accepted setup work independently of the HTTP request.
 	runtimeCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, 24*time.Hour)
@@ -177,15 +193,8 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if err != nil {
 		return err
 	}
-	if forceBuiltin {
-		cfg := loaded.Vector
-		if saved {
-			if !cfg.Enabled || !cfg.Embeddings.LocalOnly || cfg.Embeddings.Validate() != nil {
-				return nil
-			}
-		} else if cfg.Enabled || cfg.Embeddings.LocalOnly || cfg.Embeddings.Endpoint != "" || cfg.Embeddings.Model != "" {
-			return nil
-		}
+	if forceBuiltin && (loaded.Vector.Enabled || loaded.Vector.Embeddings.LocalOnly || loaded.Vector.Embeddings.Endpoint != "" || loaded.Vector.Embeddings.Model != "") {
+		return nil
 	}
 	dir, err := localEmbeddingsDir()
 	if err != nil {
@@ -208,9 +217,6 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	}
 	if lane.Action != planActionEnable {
 		return errors.New(lane.Reason)
-	}
-	if saved {
-		lane.edits = nil
 	}
 	candidate, err := config.PreviewConfigTableEdits(snapshot, lane.edits)
 	if err != nil {
@@ -310,26 +316,31 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 		publishVisualVectorFeatures(c.store, c.server, c.scheduler, vf, &state)
 	}
 	defer func() { result = errors.Join(result, publicationErr) }()
-	if lane.local {
+	var choiceErr error
+	if lane.local && !forceBuiltin {
 		if err := embedlocal.RecordChoice(); err != nil {
-			return fmt.Errorf("record local search choice: %w", err)
+			c.state.logger.Warn("record local search choice", "error", err)
+			choiceErr = errors.New("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings.") //nolint:revive,staticcheck // Displayed in Settings.
 		}
 	}
 	releaseGate()
 	releaseGate = func() {}
+	return errors.Join(c.buildIndex(workCtx, vf, report), choiceErr)
+}
 
+func (c *localEmbeddingsController) buildIndex(ctx context.Context, vf *vectorFeatures, report func(api.LocalEmbeddingsStatus)) error {
 	report(api.LocalEmbeddingsStatus{Phase: "indexing"})
 	fingerprint := vf.Cfg.GenerationFingerprint()
 	run := func(args ...string) error {
 		stderr := &childStderr{w: io.Discard}
-		err := c.runner.RunCLICommand(c.server.WithPublishedVectorConfig(workCtx), api.CLIRunRequest{Args: args}, func(event api.CLIRunEvent) error {
+		err := c.runner.RunCLICommand(c.server.WithPublishedVectorConfig(ctx), api.CLIRunRequest{Args: args}, func(event api.CLIRunEvent) error {
 			if event.Type == cliStreamStderr {
 				_, err := stderr.Write([]byte(event.Data))
 				return err
 			}
 			return nil
 		})
-		return localEmbeddingsCommandError(workCtx, err, string(stderr.tail))
+		return localEmbeddingsCommandError(ctx, err, string(stderr.tail))
 	}
 	args := []string{"embeddings", "build", "--backstop", "--yes"}
 	active, err := vf.Backend.ActiveGeneration(ctx)
