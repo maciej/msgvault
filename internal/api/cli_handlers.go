@@ -2483,6 +2483,11 @@ func (s *Server) ensureCLISearchIndexAsync(cliStore CLIStore, mayRepair bool) st
 		s.importMu.Unlock()
 		return state
 	}
+	finishIdle, ok := s.idleTracker.BeginMaintenanceWorkContext(s.importContext)
+	if !ok {
+		s.importMu.Unlock()
+		return state
+	}
 	s.importWG.Add(1)
 	s.importMu.Unlock()
 	s.ftsEnsureMayRepair = mayRepair
@@ -2490,6 +2495,7 @@ func (s *Server) ensureCLISearchIndexAsync(cliStore CLIStore, mayRepair bool) st
 	s.ftsIndexState.Store(state)
 	go func() {
 		defer s.importWG.Done()
+		defer finishIdle()
 		s.runCLISearchIndexEnsure(cliStore, knownIncomplete, !mayRepair)
 	}()
 	return state
