@@ -1424,26 +1424,28 @@ training_posture = "declared"
 func TestSetupProvidersReusesDiscoveredLocalServer(t *testing.T) {
 	for _, args := range [][]string{nil, {"--local-embeddings"}} {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
 			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 			deps := fixture.deps(t)
 			deps.localEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				return "http://127.0.0.1:54321/v1", nil
 			}
 			deps.localInstall = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				assert.Fail(t, "a discovered server needs no installation or download")
+				assert.Fail("a discovered server needs no installation or download")
 				return embedlocal.Installation{}, errors.New("unexpected installation")
 			}
 			command := newSetupProvidersCommand(deps)
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
 			command.SetArgs(args)
-			require.NoError(t, command.ExecuteContext(t.Context()))
+			require.NoError(command.ExecuteContext(t.Context()))
 			loaded := fixture.load(t)
-			assert.True(t, loaded.Vector.Enabled)
-			assert.True(t, loaded.Vector.Embeddings.LocalOnly)
+			assert.True(loaded.Vector.Enabled)
+			assert.True(loaded.Vector.Embeddings.LocalOnly)
 			choice, err := embedlocal.ChoiceRecorded()
-			require.NoError(t, err)
-			assert.Equal(t, len(args) > 0, choice)
+			require.NoError(err)
+			assert.Equal(len(args) > 0, choice)
 		})
 	}
 }
