@@ -70,7 +70,7 @@
     {@const local = row.id === 'message_embedding' && localSearch}
     {@const enabled = local && (local.kind === 'on' || local.kind === 'ollama')}
     {@const recovery = enabled && (row.chip.text !== 'On' || action?.kind === 'start' || authority)}
-    {@const error = row.id === 'message_embedding' && (!local || local.kind === 'off' || local.kind === 'downloaded' || (enabled && row.chip.text !== 'On')) ? sentence(localError) : ''}
+    {@const error = row.id === 'message_embedding' && (!local || local.kind === 'off' || local.kind === 'downloaded' || enabled) ? sentence(localError) : ''}
     <li class="row" data-feature={row.id}>
       {#if local}
         <div class="row__local">

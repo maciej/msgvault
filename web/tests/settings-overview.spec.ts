@@ -2,6 +2,34 @@ import { expect, test } from '@playwright/test';
 import { installOperations } from './e2e/fixtures/operations';
 import { embeddingStatus, lane, lanes } from '../src/test/operations';
 
+test('shows the shared choice error after local search turns on', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', error => pageErrors.push(error.message));
+  await installOperations(page);
+  await page.route('**/api/v1/operations/status', route => route.fulfill({ json: {
+    lanes: lanes(lane('message_embedding'))
+  } }));
+  await page.route('**/api/v1/embeddings/local', route => route.fulfill({ json: {
+    host: 'archive.example.test', enabled: true, provider: 'builtin', phase: 'idle',
+    download_bytes: 0, done_bytes: 0, total_bytes: 0,
+    error: "Shared choice wasn't saved. Run msgvault setup providers --local-embeddings."
+  } }));
+  await page.route('**/api/v1/search/coverage', route => route.fulfill({ json: {
+    eligible_count: 10, embedded_count: 10, percentage: 100, cache_revision: 'cache-1',
+    status: 'ready', actions: []
+  } }));
+  await page.goto(`/?explore=${encodeURIComponent(JSON.stringify({ workspace: 'settings' }))}`);
+  const row = page.locator('[data-feature="message_embedding"]');
+  await expect(row.getByText('On', { exact: true })).toBeVisible();
+  await expect(row.locator('.row__coverage')).toHaveCount(0);
+  await expect(row.getByRole('alert')).toBeVisible();
+  await expect(row.getByRole('alert')).toHaveText("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings.");
+  const bounds = await row.getByRole('alert').boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(720);
+  expect(pageErrors).toEqual([]);
+});
+
 test('Build index confirmation preserves feature labels at 768px', async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 844 });
   await installOperations(page);

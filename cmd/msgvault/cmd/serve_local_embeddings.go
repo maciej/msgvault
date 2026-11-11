@@ -129,11 +129,11 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		}
 	}
 	_, err = c.server.StartLocalEmbeddingsFromChoice(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
-		if !c.handle.WaitContext(ctx) {
-			return ctx.Err()
-		}
 		if !saved {
 			return c.enable(ctx, report, true)
+		}
+		if !c.handle.WaitContext(ctx) {
+			return ctx.Err()
 		}
 		snapshot, err := config.ReadConfigFile(c.state.cfg.ConfigFilePath())
 		if err != nil {
