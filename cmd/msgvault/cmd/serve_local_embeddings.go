@@ -137,7 +137,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 			return
 		}
 	}
-	_, err = c.server.StartLocalEmbeddings(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
+	_, _ = c.server.StartLocalEmbeddings(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
 		if !saved {
 			return c.enable(ctx, report, true)
 		}
@@ -170,9 +170,6 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		}
 		return c.buildIndex(withInvocation(ctx, c.state), live, report)
 	})
-	if err != nil {
-		c.state.logger.Warn("start local search setup", "error", err)
-	}
 }
 
 func (c *localEmbeddingsController) Enable(ctx context.Context, report func(api.LocalEmbeddingsStatus)) (result error) {

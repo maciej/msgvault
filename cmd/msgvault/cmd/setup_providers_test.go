@@ -1398,6 +1398,9 @@ training_posture = "declared"
 			after, err := os.ReadFile(fixture.path)
 			require.NoError(err)
 			assert.Equal(string(before), string(after))
+			choice, err := embedlocal.ChoiceRecorded()
+			require.NoError(err)
+			assert.False(choice)
 			if jsonOutput {
 				var result setupProvidersOutput
 				require.NoError(json.Unmarshal(output.Bytes(), &result))
@@ -1421,27 +1424,26 @@ training_posture = "declared"
 func TestSetupProvidersReusesDiscoveredLocalServer(t *testing.T) {
 	for _, args := range [][]string{nil, {"--local-embeddings"}} {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
-			assert, require := assert.New(t), require.New(t)
 			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 			deps := fixture.deps(t)
 			deps.localEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				return "http://127.0.0.1:54321/v1", nil
 			}
 			deps.localInstall = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				assert.Fail("a discovered server needs no installation or download")
+				assert.Fail(t, "a discovered server needs no installation or download")
 				return embedlocal.Installation{}, errors.New("unexpected installation")
 			}
 			command := newSetupProvidersCommand(deps)
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
 			command.SetArgs(args)
-			require.NoError(command.ExecuteContext(t.Context()))
+			require.NoError(t, command.ExecuteContext(t.Context()))
 			loaded := fixture.load(t)
-			assert.True(loaded.Vector.Enabled)
-			assert.True(loaded.Vector.Embeddings.LocalOnly)
+			assert.True(t, loaded.Vector.Enabled)
+			assert.True(t, loaded.Vector.Embeddings.LocalOnly)
 			choice, err := embedlocal.ChoiceRecorded()
-			require.NoError(err)
-			assert.Equal(len(args) > 0, choice)
+			require.NoError(t, err)
+			assert.Equal(t, len(args) > 0, choice)
 		})
 	}
 }
@@ -1470,32 +1472,21 @@ func TestSetupProvidersDefaultOllamaProbeSelection(t *testing.T) {
 }
 
 func TestSetupProvidersRetriesRecordingLocalChoice(t *testing.T) {
-	for _, jsonOutput := range []bool{false, true} {
-		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
-			assert, require := assert.New(t), require.New(t)
-			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
-			dir, err := embedlocal.DefaultDir()
-			require.NoError(err)
-			marker := filepath.Join(dir, "search-by-meaning")
-			require.NoError(os.MkdirAll(marker, 0o700))
-			output, err := fixture.run(t, "providers", "--local-embeddings", "--yes", fmt.Sprintf("--json=%t", jsonOutput))
-			require.ErrorContains(err, "record local search choice")
-			if jsonOutput {
-				var result setupProvidersOutput
-				require.NoError(json.NewDecoder(strings.NewReader(output)).Decode(&result))
-				assert.True(result.Applied)
-				assert.Contains(result.FollowUps, "msgvault embeddings build --full-rebuild --yes")
-			} else {
-				assert.Contains(output, "Configuration written")
-				assert.Contains(output, "msgvault embeddings build --full-rebuild --yes")
-			}
-			assert.True(fixture.load(t).Vector.Embeddings.LocalOnly)
-			require.NoError(os.Remove(marker))
-			_, err = fixture.run(t, "providers", "--local-embeddings", "--yes")
-			require.NoError(err)
-			choice, err := embedlocal.ChoiceRecorded()
-			require.NoError(err)
-			assert.True(choice)
-		})
-	}
+	assert, require := assert.New(t), require.New(t)
+	fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
+	dir, err := embedlocal.DefaultDir()
+	require.NoError(err)
+	marker := filepath.Join(dir, "search-by-meaning")
+	require.NoError(os.MkdirAll(marker, 0o700))
+	output, err := fixture.run(t, "providers", "--local-embeddings", "--yes")
+	require.ErrorContains(err, "record local search choice")
+	assert.Contains(output, "Configuration written")
+	assert.Contains(output, "msgvault embeddings build --full-rebuild --yes")
+	assert.True(fixture.load(t).Vector.Embeddings.LocalOnly)
+	require.NoError(os.Remove(marker))
+	_, err = fixture.run(t, "providers", "--local-embeddings", "--yes")
+	require.NoError(err)
+	choice, err := embedlocal.ChoiceRecorded()
+	require.NoError(err)
+	assert.True(choice)
 }

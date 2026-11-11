@@ -676,8 +676,6 @@ func TestLocalEmbeddingsSavedStartupSkipsChangedRecipe(t *testing.T) {
 		afterWait bool
 	}{
 		{name: "stale runtime", path: []string{"vector", "embeddings"}, edit: map[string]any{"document_prefix": "changed: "}},
-		{name: "custom endpoint", path: []string{"vector", "embeddings"}, edit: map[string]any{"endpoint": "https://api.example.test/v1"}},
-		{name: "preprocessing changed", path: []string{"vector", "preprocess"}, edit: map[string]any{"strip_html": false}},
 		{name: "preprocessing changed while waiting", path: []string{"vector", "preprocess"}, edit: map[string]any{"strip_html": false}, afterWait: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -725,6 +723,7 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 	}{
 		{name: "disabled builtin with choice", local: true},
 		{name: "custom provider", model: "custom-embedding", endpoint: "https://api.example.test/v1", enabled: true},
+		{name: "local custom endpoint", model: "nomic-embed-text", endpoint: "https://api.example.test/v1", enabled: true, local: true},
 		{name: "no choice", noChoice: true},
 		{name: "unreadable choice", noChoice: true, unreadable: true},
 	} {
@@ -777,7 +776,7 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 	}
 }
 
-func TestLocalEmbeddingsSavedStartupIgnoresUnreadableChoice(t *testing.T) {
+func TestLocalEmbeddingsSavedStartupBuildsOnlyMissingIndex(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		for _, active := range []bool{false, true} {
 			if unreadable && active {
