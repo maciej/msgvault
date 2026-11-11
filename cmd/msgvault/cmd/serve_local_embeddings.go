@@ -152,7 +152,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		if err != nil {
 			return err
 		}
-		if !loaded.Vector.Enabled || loaded.Vector.Embeddings != cfg.Embeddings {
+		if !loaded.Vector.Enabled {
 			return nil
 		}
 		c.handle.mu.Lock()

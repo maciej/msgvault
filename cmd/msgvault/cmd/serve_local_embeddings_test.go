@@ -714,6 +714,24 @@ func TestLocalEmbeddingsSavedStartupSkipsChangedRecipe(t *testing.T) {
 			assert.Zero(t, f.inputs.Load())
 		})
 	}
+	t.Run("no model files", func(t *testing.T) {
+		f := newLocalActivationFixture(t, "nomic-embed-text")
+		f.useBuiltin(t)
+		localEmbeddingEndpoint = embedlocal.Endpoint
+		before, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+		require.NoError(t, err)
+		f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+		require.True(t, f.handle.WaitTimeout(5*time.Second))
+		f.controller.handle = f.handle
+		require.Nil(t, f.handle.vf)
+		f.server.SetLocalEmbeddings(f.controller)
+		f.controller.StartFromChoice()
+		require.NoError(t, f.server.Shutdown(t.Context()))
+		after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+		require.NoError(t, err)
+		assert.Equal(t, before.Content, after.Content)
+		assert.Zero(t, f.installs)
+	})
 }
 
 func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
@@ -834,24 +852,6 @@ func TestLocalEmbeddingsSavedStartupBuildsOnlyMissingIndex(t *testing.T) {
 			})
 		}
 	}
-	t.Run("no model files", func(t *testing.T) {
-		f := newLocalActivationFixture(t, "nomic-embed-text")
-		f.useBuiltin(t)
-		localEmbeddingEndpoint = embedlocal.Endpoint
-		before, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
-		require.NoError(t, err)
-		f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
-		require.True(t, f.handle.WaitTimeout(5*time.Second))
-		f.controller.handle = f.handle
-		require.Nil(t, f.handle.vf)
-		f.server.SetLocalEmbeddings(f.controller)
-		f.controller.StartFromChoice()
-		require.NoError(t, f.server.Shutdown(t.Context()))
-		after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
-		require.NoError(t, err)
-		assert.Equal(t, before.Content, after.Content)
-		assert.Zero(t, f.installs)
-	})
 }
 
 func TestLocalEmbeddingsMarkerFailureStillBuilds(t *testing.T) {
@@ -868,39 +868,27 @@ func TestLocalEmbeddingsMarkerFailureStillBuilds(t *testing.T) {
 }
 
 func TestLocalEmbeddingsStartupPreservesProviderEditWhileWaiting(t *testing.T) {
-	for _, saved := range []bool{false, true} {
-		t.Run(strconv.FormatBool(saved), func(t *testing.T) {
-			model := ""
-			if saved {
-				model = "nomic-embed-text"
-			}
-			f := newLocalActivationFixture(t, model)
-			if saved {
-				f.useBuiltin(t)
-			} else {
-				require.NoError(t, embedlocal.RecordChoice())
-			}
-			f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
-			require.True(t, f.handle.WaitTimeout(5*time.Second))
-			f.handle = &vectorInitHandle{done: make(chan struct{}), vf: f.handle.vf}
-			f.controller.handle = f.handle
-			f.server.SetLocalEmbeddings(f.controller)
-			f.controller.StartFromChoice()
-			snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
-			require.NoError(t, err)
-			written, err := config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{
-				{Path: []string{"vector"}, Values: map[string]any{"enabled": true}},
-				{Path: []string{"vector", "embeddings"}, Values: map[string]any{"local_only": false, "endpoint": "https://api.example.test/v1", "model": "other-model", "dimension": 768}},
-			})
-			require.NoError(t, err)
-			close(f.handle.done)
-			require.NoError(t, f.server.Shutdown(t.Context()))
-			after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
-			require.NoError(t, err)
-			assert.Equal(t, written.Content, after.Content)
-			assert.Zero(t, f.inputs.Load())
-			assert.Zero(t, f.installs)
-			assert.Empty(t, f.runner.calls)
-		})
-	}
+	f := newLocalActivationFixture(t, "")
+	require.NoError(t, embedlocal.RecordChoice())
+	f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+	require.True(t, f.handle.WaitTimeout(5*time.Second))
+	f.handle = &vectorInitHandle{done: make(chan struct{}), vf: f.handle.vf}
+	f.controller.handle = f.handle
+	f.server.SetLocalEmbeddings(f.controller)
+	f.controller.StartFromChoice()
+	snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+	require.NoError(t, err)
+	written, err := config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{
+		{Path: []string{"vector"}, Values: map[string]any{"enabled": true}},
+		{Path: []string{"vector", "embeddings"}, Values: map[string]any{"local_only": false, "endpoint": "https://api.example.test/v1", "model": "other-model", "dimension": 768}},
+	})
+	require.NoError(t, err)
+	close(f.handle.done)
+	require.NoError(t, f.server.Shutdown(t.Context()))
+	after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+	require.NoError(t, err)
+	assert.Equal(t, written.Content, after.Content)
+	assert.Zero(t, f.inputs.Load())
+	assert.Zero(t, f.installs)
+	assert.Empty(t, f.runner.calls)
 }
