@@ -7,6 +7,8 @@
   import type { OverviewAction, OverviewRow } from '../../settings/overview';
   import { sentence } from '../../settings/local-embeddings';
 
+  const retryCommand = 'msgvault setup providers --local-embeddings';
+
   let {
     rows,
     localSearch,
@@ -33,6 +35,11 @@
   } = $props();
 
 </script>
+
+{#snippet errorMessage(error: string)}
+  {@const commandAt = error.indexOf(retryCommand)}
+  <p class="row__error" role="alert">{#if commandAt >= 0}{error.slice(0, commandAt)}<code>{retryCommand}</code>{error.slice(commandAt + retryCommand.length)}{:else}{error}{/if}</p>
+{/snippet}
 
 {#snippet rowActions(action: OverviewAction | undefined, authority: OverviewRow['relatedStatus'], name: string)}
       <span class="row__action">
@@ -83,7 +90,7 @@
           <div class="row__recovery">
             <div class="row__recovery-copy">
               <span class="row__coverage">Message index <Chip size="xs" tone={row.chip.tone} uppercase={false}>{row.chip.text}</Chip></span>
-              {#if error}<p class="row__error" role="alert">{error}</p>{/if}
+              {#if error}{@render errorMessage(error)}{/if}
             </div>
             {@render rowActions(action?.kind === 'settings' ? undefined : action, authority, row.name)}
           </div>
@@ -97,7 +104,7 @@
       {#if action?.kind === 'host'}<span class="row__consent">{action.text}</span>{/if}
       {#if action?.kind === 'start' && action.consent}<span class="row__consent">{action.consent}</span>{/if}
       {/if}
-      {#if error && !recovery}<p class="row__error" role="alert">{error}</p>{/if}
+      {#if error && !recovery}{@render errorMessage(error)}{/if}
     </li>
   {/each}
 </ul>
@@ -140,6 +147,7 @@
   .row__coverage { display: flex; align-items: center; gap: var(--control-gap); color: var(--text-muted); font-size: var(--font-size-xs); }
   .row__recovery .row__action { grid-column: 3; margin-top: calc((var(--font-size-xs) * 1.45 - var(--control-h)) / 2); }
   .row__error { grid-column: 1 / -1; margin: 0; color: var(--text-danger); font-size: var(--font-size-xs); contain: inline-size; }
+  .row__error code { background: var(--bg-inset); border-radius: var(--radius-sm); padding: 0 0.2em; }
   .row > .row__error { margin-top: calc(var(--space-3) / -2); }
   .row__name {
     display: flex;

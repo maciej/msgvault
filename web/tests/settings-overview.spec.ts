@@ -21,6 +21,7 @@ test('shows the shared choice error after local search turns on', async ({ page 
   await expect(row.getByText('On', { exact: true })).toBeVisible();
   await expect(row.getByRole('alert')).toBeVisible();
   await expect(row.getByRole('alert')).toHaveText("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings to save it.");
+  await expect(row.getByRole('alert').locator('code')).toHaveText('msgvault setup providers --local-embeddings');
 });
 
 test('Build index confirmation preserves feature labels at 768px', async ({ page }) => {
@@ -73,6 +74,8 @@ for (const width of [1280, 390]) {
       await page.goto(`/?explore=${encodeURIComponent(JSON.stringify({ workspace: 'settings' }))}`);
       const row = page.locator('[data-feature="message_embedding"]');
       await expect(row.locator('.row__coverage')).toBeVisible();
+      await expect(row.getByRole('alert')).toHaveText('embedding endpoint failed.');
+      await expect(row.getByRole('alert').locator('code')).toHaveCount(0);
       const coverage = await row.locator('.row__coverage').boundingBox();
       const action = await row.getByRole('button', { name: 'Build index, Search by meaning' }).boundingBox();
       expect(coverage).not.toBeNull();
