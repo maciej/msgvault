@@ -91,7 +91,7 @@ func (s *Server) StartLocalEmbeddings(enable func(context.Context, func(LocalEmb
 	s.importMu.Lock()
 	if s.localEmbeddings == nil || s.importsClosed {
 		s.importMu.Unlock()
-		return LocalEmbeddingsStatus{}, errors.New("Local search setup is unavailable")
+		return LocalEmbeddingsStatus{}, errors.New("Local search setup is unavailable") //nolint:staticcheck // Displayed in the API response.
 	}
 	if s.localSetup.Running {
 		status := s.localSetup
@@ -101,7 +101,7 @@ func (s *Server) StartLocalEmbeddings(enable func(context.Context, func(LocalEmb
 	finishIdle, ok := s.idleTracker.BeginWork()
 	if !ok {
 		s.importMu.Unlock()
-		return LocalEmbeddingsStatus{}, errors.New("The daemon is stopping")
+		return LocalEmbeddingsStatus{}, errors.New("The daemon is stopping") //nolint:staticcheck // Displayed in the API response.
 	}
 	if enable == nil {
 		enable = s.localEmbeddings.Enable
