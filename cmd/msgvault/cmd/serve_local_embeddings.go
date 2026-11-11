@@ -100,6 +100,11 @@ func isOllamaEmbeddingEndpoint(ctx context.Context, endpoint string) bool {
 	return embeddingProviderName(endpoint) == "local" && probeOllamaServer(ctx, server).Catalog
 }
 
+func matchesBuiltinRecipe(live, saved vector.Config) bool {
+	live.Embeddings.Endpoint = ""
+	return live.Embeddings == saved.Embeddings
+}
+
 // StartFromChoice queues first-time setup when a saved choice permits it.
 func (c *localEmbeddingsController) StartFromChoice() {
 	snapshot, err := config.ReadConfigFile(c.state.cfg.ConfigFilePath())
@@ -113,7 +118,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		return
 	}
 	cfg := loaded.Vector
-	saved := cfg.Enabled && cfg.Embeddings.LocalOnly && cfg.Embeddings.Validate() == nil
+	saved := cfg.Enabled && cfg.Embeddings.LocalOnly && cfg.Embeddings.Endpoint == "" && cfg.Embeddings.Validate() == nil
 	configured := cfg.Enabled || cfg.Embeddings.LocalOnly || cfg.Embeddings.Endpoint != "" || cfg.Embeddings.Model != ""
 	if !saved {
 		if configured {
@@ -149,7 +154,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		c.handle.mu.Lock()
 		live := c.handle.vf
 		c.handle.mu.Unlock()
-		if live == nil {
+		if live == nil || !matchesBuiltinRecipe(live.Cfg, cfg) {
 			return nil
 		}
 		_, err = live.Backend.ActiveGeneration(ctx)

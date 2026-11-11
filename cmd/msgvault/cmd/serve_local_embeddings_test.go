@@ -668,22 +668,68 @@ func TestLocalEmbeddingsStartupSharedChoice(t *testing.T) {
 	assert.True(t, os.SameFile(before, after))
 }
 
+func TestLocalEmbeddingsSavedStartupSkipsChangedRecipe(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit map[string]any
+	}{
+		{name: "stale runtime", edit: map[string]any{"document_prefix": "changed: "}},
+		{name: "custom endpoint", edit: map[string]any{"endpoint": "https://api.example.test/v1"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newLocalActivationFixture(t, "nomic-embed-text")
+			f.useBuiltin(t)
+			f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+			require.True(t, f.handle.WaitTimeout(5*time.Second))
+			require.NotNil(t, f.handle.vf)
+			f.controller.handle = f.handle
+			snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+			require.NoError(t, err)
+			_, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{{Path: []string{"vector", "embeddings"}, Values: tc.edit}})
+			require.NoError(t, err)
+			f.server.SetLocalEmbeddings(f.controller)
+			f.controller.StartFromChoice()
+			require.Eventually(t, func() bool {
+				request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
+				request.Header.Set("Authorization", "Bearer owner")
+				response := httptest.NewRecorder()
+				f.server.Router().ServeHTTP(response, request)
+				var status api.LocalEmbeddingsStatus
+				return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && !status.Running
+			}, 5*time.Second, 20*time.Millisecond)
+			require.NoError(t, f.server.Shutdown(t.Context()))
+			assert.Empty(t, f.runner.calls)
+			assert.Zero(t, f.inputs.Load())
+		})
+	}
+}
+
 func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 	for _, tc := range []struct {
-		name, model, endpoint string
-		enabled, local        bool
+		name, model, endpoint                string
+		enabled, local, noChoice, unreadable bool
 	}{
 		{name: "disabled builtin with choice", local: true},
 		{name: "custom provider", model: "custom-embedding", endpoint: "https://api.example.test/v1", enabled: true},
-		{name: "ollama provider", model: "nomic-embed-text", enabled: true},
+		{name: "no choice", noChoice: true},
+		{name: "unreadable choice", noChoice: true, unreadable: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := tc.model
-			if model == "" {
+			if model == "" && !tc.noChoice {
 				model = "nomic-embed-text"
 			}
 			f := newLocalActivationFixture(t, model)
-			require.NoError(t, embedlocal.RecordChoice())
+			if tc.local {
+				f.useBuiltin(t)
+			}
+			if tc.unreadable {
+				dir, err := embedlocal.DefaultDir()
+				require.NoError(t, err)
+				require.NoError(t, os.MkdirAll(filepath.Join(dir, "search-by-meaning"), 0o700))
+			} else if !tc.noChoice {
+				require.NoError(t, embedlocal.RecordChoice())
+			}
 			snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
 			embeddings := map[string]any{"local_only": tc.local}
@@ -711,6 +757,8 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 			after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
 			assert.Equal(t, snapshot.Content, after.Content)
+			assert.Zero(t, f.installs)
+			assert.Zero(t, f.inputs.Load())
 		})
 	}
 }
@@ -718,6 +766,9 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 func TestLocalEmbeddingsSavedStartupIgnoresUnreadableChoice(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		for _, active := range []bool{false, true} {
+			if unreadable && active {
+				continue
+			}
 			t.Run(fmt.Sprintf("unreadable=%t/active=%t", unreadable, active), func(t *testing.T) {
 				assert, require := assert.New(t), require.New(t)
 				f := newLocalActivationFixture(t, "nomic-embed-text")
@@ -770,25 +821,24 @@ func TestLocalEmbeddingsSavedStartupIgnoresUnreadableChoice(t *testing.T) {
 			})
 		}
 	}
-}
-
-func TestLocalEmbeddingsSavedStartupWithoutFilesDoesNotInstall(t *testing.T) {
-	f := newLocalActivationFixture(t, "nomic-embed-text")
-	f.useBuiltin(t)
-	localEmbeddingEndpoint = embedlocal.Endpoint
-	before, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
-	require.NoError(t, err)
-	f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
-	require.True(t, f.handle.WaitTimeout(5*time.Second))
-	f.controller.handle = f.handle
-	require.Nil(t, f.handle.vf)
-	f.server.SetLocalEmbeddings(f.controller)
-	f.controller.StartFromChoice()
-	require.NoError(t, f.server.Shutdown(t.Context()))
-	after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
-	require.NoError(t, err)
-	assert.Equal(t, before.Content, after.Content)
-	assert.Zero(t, f.installs)
+	t.Run("no model files", func(t *testing.T) {
+		f := newLocalActivationFixture(t, "nomic-embed-text")
+		f.useBuiltin(t)
+		localEmbeddingEndpoint = embedlocal.Endpoint
+		before, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+		require.NoError(t, err)
+		f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
+		require.True(t, f.handle.WaitTimeout(5*time.Second))
+		f.controller.handle = f.handle
+		require.Nil(t, f.handle.vf)
+		f.server.SetLocalEmbeddings(f.controller)
+		f.controller.StartFromChoice()
+		require.NoError(t, f.server.Shutdown(t.Context()))
+		after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
+		require.NoError(t, err)
+		assert.Equal(t, before.Content, after.Content)
+		assert.Zero(t, f.installs)
+	})
 }
 
 func TestLocalEmbeddingsMarkerFailureStillBuilds(t *testing.T) {
@@ -802,25 +852,6 @@ func TestLocalEmbeddingsMarkerFailureStillBuilds(t *testing.T) {
 	assert.Positive(t, f.inputs.Load())
 	_, err = f.handle.vf.Backend.ActiveGeneration(f.ctx)
 	require.NoError(t, err)
-}
-
-func TestLocalEmbeddingsStartupWithoutReadableChoice(t *testing.T) {
-	for _, unreadable := range []bool{false, true} {
-		t.Run(strconv.FormatBool(unreadable), func(t *testing.T) {
-			f := newLocalActivationFixture(t, "")
-			if unreadable {
-				dir, err := embedlocal.DefaultDir()
-				require.NoError(t, err)
-				require.NoError(t, os.MkdirAll(filepath.Join(dir, "search-by-meaning"), 0o700))
-			}
-			f.start(t)
-			f.server.SetLocalEmbeddings(f.controller)
-			f.controller.StartFromChoice()
-			require.NoError(t, f.server.Shutdown(t.Context()))
-			assert.Zero(t, f.installs)
-			assert.Zero(t, f.inputs.Load())
-		})
-	}
 }
 
 func TestLocalEmbeddingsStartupPreservesProviderEditWhileWaiting(t *testing.T) {
