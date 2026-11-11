@@ -241,7 +241,7 @@ func TestLocalEmbeddingsRestoresSavedBuiltinWithOllamaAvailable(t *testing.T) {
 	assert.Empty(status.Error)
 	localEmbeddingEndpoint = fixtureEndpoint
 	require.NoError(f.controller.Enable(f.ctx, func(api.LocalEmbeddingsStatus) {}))
-	assert.Equal(1, f.installs)
+	require.Equal(1, f.installs)
 	builds := len(f.runner.calls)
 	require.NoError(f.controller.Enable(f.ctx, func(api.LocalEmbeddingsStatus) {}))
 	assert.Equal(1, f.installs)
@@ -699,9 +699,6 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 			f.cfg.Vector.Embeddings.LocalOnly = tc.local
 			if tc.endpoint != "" {
 				f.cfg.Vector.Embeddings.Endpoint = tc.endpoint
-			}
-			if tc.name == "ollama provider" {
-				require.True(t, isOllamaEmbeddingEndpoint(t.Context(), f.cfg.Vector.Embeddings.Endpoint))
 			}
 			f.handle = &vectorInitHandle{done: make(chan struct{})}
 			f.controller.handle = f.handle

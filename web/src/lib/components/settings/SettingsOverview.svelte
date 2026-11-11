@@ -87,8 +87,6 @@
             </div>
             {@render rowActions(action?.kind === 'settings' ? undefined : action, authority, row.name)}
           </div>
-        {:else if error}
-          <p class="row__error" role="alert">{error}</p>
         {/if}
       {:else}
       <span class="row__name">
@@ -98,8 +96,8 @@
       {@render rowActions(action, authority, row.name)}
       {#if action?.kind === 'host'}<span class="row__consent">{action.text}</span>{/if}
       {#if action?.kind === 'start' && action.consent}<span class="row__consent">{action.consent}</span>{/if}
-      {#if error}<p class="row__error" role="alert">{error}</p>{/if}
       {/if}
+      {#if error && !recovery}<p class="row__error" role="alert">{error}</p>{/if}
     </li>
   {/each}
 </ul>
