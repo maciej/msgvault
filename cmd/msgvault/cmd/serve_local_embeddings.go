@@ -128,7 +128,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 			return
 		}
 	}
-	_, err = c.server.StartLocalEmbeddingsFromChoice(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
+	_, err = c.server.StartLocalEmbeddings(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
 		if !saved {
 			return c.enable(ctx, report, true)
 		}
@@ -204,9 +204,6 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if err != nil {
 		return fmt.Errorf("read local search settings: %w", err)
 	}
-	c.handle.mu.Lock()
-	live := c.handle.vf
-	c.handle.mu.Unlock()
 	deps := defaultSetupProvidersDeps(ctx)
 	deps.lookupEnv = func(string) (string, bool) { return "", false }
 	deps.localEndpoint = localEmbeddingEndpoint
@@ -229,6 +226,9 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	if err != nil {
 		return err
 	}
+	c.handle.mu.Lock()
+	live := c.handle.vf
+	c.handle.mu.Unlock()
 	if nextConfig.DatabaseDSN() != c.dbPath || nextConfig.Data.DataDir != c.state.cfg.Data.DataDir ||
 		(live != nil && nextConfig.Vector.DBPath != live.Cfg.DBPath) {
 		return errors.New("Restart msgvault to use the new storage settings.") //nolint:revive,staticcheck // Displayed directly as a recovery message in Settings.

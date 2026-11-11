@@ -85,18 +85,9 @@ func (s *Server) handleEnableLocalEmbeddings(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusAccepted, status)
 }
 
-// StartLocalEmbeddings starts a manual setup job.
+// StartLocalEmbeddings starts a local setup job.
 // A nil enable function uses the registered controller.
 func (s *Server) StartLocalEmbeddings(enable func(context.Context, func(LocalEmbeddingsStatus)) error) (LocalEmbeddingsStatus, error) {
-	return s.startLocalEmbeddings(enable, false)
-}
-
-// StartLocalEmbeddingsFromChoice starts a startup job from saved settings.
-func (s *Server) StartLocalEmbeddingsFromChoice(enable func(context.Context, func(LocalEmbeddingsStatus)) error) (LocalEmbeddingsStatus, error) {
-	return s.startLocalEmbeddings(enable, true)
-}
-
-func (s *Server) startLocalEmbeddings(enable func(context.Context, func(LocalEmbeddingsStatus)) error, startup bool) (LocalEmbeddingsStatus, error) {
 	s.importMu.Lock()
 	if s.localEmbeddings == nil || s.importsClosed {
 		s.importMu.Unlock()
@@ -104,11 +95,7 @@ func (s *Server) startLocalEmbeddings(enable func(context.Context, func(LocalEmb
 	}
 	if s.localSetup.Running {
 		status := s.localSetup
-		startupRunning := s.localSetupStartup
 		s.importMu.Unlock()
-		if enable == nil && startupRunning {
-			return LocalEmbeddingsStatus{}, errors.New("Local search is starting. Wait for startup to finish, then try again.") //nolint:revive,staticcheck // Displayed in the API response.
-		}
 		return status, nil
 	}
 	finishIdle, ok := s.idleTracker.BeginWork()
@@ -120,7 +107,6 @@ func (s *Server) startLocalEmbeddings(enable func(context.Context, func(LocalEmb
 		enable = s.localEmbeddings.Enable
 	}
 	s.localSetup = LocalEmbeddingsStatus{Phase: "idle", Running: true}
-	s.localSetupStartup = startup
 	status := s.localSetup
 	s.importWG.Add(1)
 	s.importMu.Unlock()
@@ -137,7 +123,6 @@ func (s *Server) startLocalEmbeddings(enable func(context.Context, func(LocalEmb
 		s.importMu.Lock()
 		s.localSetup.Running = false
 		s.localSetup.Phase = "idle"
-		s.localSetupStartup = false
 		if err != nil {
 			s.localSetup.Error = err.Error()
 		}

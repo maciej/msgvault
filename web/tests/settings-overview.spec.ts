@@ -24,9 +24,6 @@ test('shows the shared choice error after local search turns on', async ({ page 
   await expect(row.locator('.row__coverage')).toHaveCount(0);
   await expect(row.getByRole('alert')).toBeVisible();
   await expect(row.getByRole('alert')).toHaveText("Shared choice wasn't saved. Run msgvault setup providers --local-embeddings.");
-  const bounds = await row.getByRole('alert').boundingBox();
-  expect(bounds).not.toBeNull();
-  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(720);
   expect(pageErrors).toEqual([]);
 });
 

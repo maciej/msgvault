@@ -1272,7 +1272,7 @@ func TestSetupProvidersLocalDownloadTransaction(t *testing.T) {
 			assert.Equal(tc.enabled, loaded.Vector.Embeddings.LocalOnly)
 			choice, err := embedlocal.ChoiceRecorded()
 			require.NoError(err)
-			assert.Equal(tc.enabled, choice)
+			assert.Equal(tc.name == "explicit yes", choice)
 			assert.Equal(tc.enabled, loaded.Vector.People.Enabled)
 			if !tc.enabled {
 				assert.Contains(output.String(), "msgvault setup providers --local-embeddings")
@@ -1411,27 +1411,26 @@ training_posture = "declared"
 func TestSetupProvidersReusesDiscoveredLocalServer(t *testing.T) {
 	for _, args := range [][]string{nil, {"--local-embeddings"}} {
 		t.Run(fmt.Sprint(args), func(t *testing.T) {
-			assert, require := assert.New(t), require.New(t)
 			fixture := newSetupProvidersFixture(t, setupProvidersMinimalConfig)
 			deps := fixture.deps(t)
 			deps.localEndpoint = func(context.Context, embedlocal.Options) (string, error) {
 				return "http://127.0.0.1:54321/v1", nil
 			}
 			deps.localInstall = func(context.Context, embedlocal.InstallOptions) (embedlocal.Installation, error) {
-				assert.Fail("a discovered server needs no installation or download")
+				assert.Fail(t, "a discovered server needs no installation or download")
 				return embedlocal.Installation{}, errors.New("unexpected installation")
 			}
 			command := newSetupProvidersCommand(deps)
 			command.SetOut(io.Discard)
 			command.SetErr(io.Discard)
 			command.SetArgs(args)
-			require.NoError(command.ExecuteContext(t.Context()))
+			require.NoError(t, command.ExecuteContext(t.Context()))
 			loaded := fixture.load(t)
-			assert.True(loaded.Vector.Enabled)
-			assert.True(loaded.Vector.Embeddings.LocalOnly)
+			assert.True(t, loaded.Vector.Enabled)
+			assert.True(t, loaded.Vector.Embeddings.LocalOnly)
 			choice, err := embedlocal.ChoiceRecorded()
-			require.NoError(err)
-			assert.Equal(len(args) > 0, choice)
+			require.NoError(t, err)
+			assert.Equal(t, len(args) > 0, choice)
 		})
 	}
 }
