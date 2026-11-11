@@ -996,23 +996,26 @@ func runSetupProviders(command *cobra.Command, deps setupProvidersDeps, options 
 		}
 	}
 
+	installedLocal := false
 	for i, lane := range plan.Lanes {
 		if !lane.local || lane.Action != planActionEnable || (detection.embeddingError == nil && detection.embeddingEndpoint != "") {
 			continue
 		}
-		err := installSetupLocalEmbeddings(command, deps, options, reader)
+		accepted, err := installSetupLocalEmbeddings(command, deps, options, reader)
 		if err != nil {
 			plan.Lanes[i].Action, plan.Lanes[i].Reason = planActionPending, err.Error()
 			plan.Lanes[i].edits = nil
 			plan.Lanes[i].next = []string{"msgvault setup providers --local-embeddings"}
 			plan.refreshDependencies(loaded, detection, options, now)
+		} else {
+			installedLocal = accepted
 		}
 	}
 	if err := applySetupProvidersPlan(command, deps, before, &plan, options.jsonOutput); err != nil {
 		return err
 	}
 	for _, lane := range plan.Lanes {
-		if lane.Lane == laneTextSearch && lane.local && lane.Action == planActionEnable {
+		if lane.Lane == laneTextSearch && lane.local && lane.Action == planActionEnable && (options.localEmbeddings || installedLocal) {
 			if err := embedlocal.RecordChoice(); err != nil {
 				return fmt.Errorf("record local search choice: %w", err)
 			}
@@ -1021,16 +1024,18 @@ func runSetupProviders(command *cobra.Command, deps setupProvidersDeps, options 
 	return writeSetupProvidersResult(command, deps, nil, &plan, options, plan.writes(), declined)
 }
 
-func installSetupLocalEmbeddings(command *cobra.Command, deps setupProvidersDeps, options setupProvidersOptions, reader *bufio.Reader) error {
+func installSetupLocalEmbeddings(command *cobra.Command, deps setupProvidersDeps, options setupProvidersOptions, reader *bufio.Reader) (bool, error) {
 	if !options.localEmbeddings && (options.yes || options.jsonOutput || deps.isTerminal == nil || !deps.isTerminal(command)) {
-		return errors.New("local embeddings need an explicit selection; run msgvault setup providers --local-embeddings")
+		return false, errors.New("local embeddings need an explicit selection; run msgvault setup providers --local-embeddings")
 	}
 	dir, err := localEmbeddingsDir()
 	if err != nil {
-		return fmt.Errorf("local embedding directory: %w", err)
+		return false, fmt.Errorf("local embedding directory: %w", err)
 	}
+	accepted := false
 	_, err = deps.localInstall(command.Context(), embedlocal.InstallOptions{DataDir: dir, Confirm: func(_ context.Context, size int64) (bool, error) {
 		if options.yes {
+			accepted = true
 			return true, nil
 		}
 		if options.jsonOutput || deps.isTerminal == nil || !deps.isTerminal(command) {
@@ -1041,9 +1046,10 @@ func installSetupLocalEmbeddings(command *cobra.Command, deps setupProvidersDeps
 		if err != nil && !errors.Is(err, io.EOF) {
 			return false, fmt.Errorf("read download answer: %w", err)
 		}
-		return isYesAnswer(strings.ToLower(strings.TrimSpace(answer))), nil
+		accepted = isYesAnswer(strings.ToLower(strings.TrimSpace(answer)))
+		return accepted, nil
 	}})
-	return err
+	return accepted, err
 }
 
 func setupPosture(saved, proposed string, override bool) string {

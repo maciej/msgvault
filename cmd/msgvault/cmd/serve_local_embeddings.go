@@ -128,7 +128,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 			return
 		}
 	}
-	_, err = c.server.StartLocalEmbeddings(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
+	_, err = c.server.StartLocalEmbeddingsFromChoice(func(ctx context.Context, report func(api.LocalEmbeddingsStatus)) error {
 		if !c.handle.WaitContext(ctx) {
 			return ctx.Err()
 		}
@@ -207,11 +207,10 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	c.handle.mu.Lock()
 	live := c.handle.vf
 	c.handle.mu.Unlock()
-	restoreSaved := !forceBuiltin && live == nil && loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly && loaded.Vector.Embeddings.Validate() == nil
 	deps := defaultSetupProvidersDeps(ctx)
 	deps.lookupEnv = func(string) (string, bool) { return "", false }
 	deps.localEndpoint = localEmbeddingEndpoint
-	detection := detectSetupProviders(ctx, loaded, deps, setupProvidersOptions{localEmbeddings: forceBuiltin || restoreSaved || (!loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly)})
+	detection := detectSetupProviders(ctx, loaded, deps, setupProvidersOptions{localEmbeddings: forceBuiltin || (!loaded.Vector.Enabled && loaded.Vector.Embeddings.LocalOnly)})
 	detection.configKeys = configKeys
 	lane := planTextSearch(loaded, detection)
 	if lane.Action == planActionKeep {
@@ -221,9 +220,6 @@ func (c *localEmbeddingsController) enable(ctx context.Context, report func(api.
 	}
 	if lane.Action != planActionEnable {
 		return errors.New(lane.Reason)
-	}
-	if restoreSaved {
-		lane.edits = nil
 	}
 	candidate, err := config.PreviewConfigTableEdits(snapshot, lane.edits)
 	if err != nil {
