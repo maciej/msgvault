@@ -307,7 +307,7 @@ func testDocumentVectorObsoleteCleanup(t *testing.T) {
 	reclaimed, err := f.Store.ClaimDocumentVectorChunk(t.Context(), generation.ID, 0, 1, "rebuild-worker", now.Add(5*time.Second), time.Minute)
 	require.NoError(t, err)
 	require.NotNil(t, reclaimed)
-	assert.Equal(t, claim.Token, reclaimed.Token)
+	assert.NotEqual(t, claim.Token, reclaimed.Token, "recreated publications get a new token incarnation")
 	assert.Equal(t, 1, reclaimed.AttemptCount)
 
 	t.Run("retired makes every token obsolete", func(t *testing.T) {

@@ -813,6 +813,23 @@ func TestWorkerRunRetriesBackendPutFailureWithoutCommitting(t *testing.T) {
 	assertions.Equal("backend_transient", ledger.failures[0].errorCode)
 }
 
+func TestWorkerRunReleasesClaimsWhenBackendPutSeesPolicyTransition(t *testing.T) {
+	assertions := assert.New(t)
+	requirements := require.New(t)
+	ledger := newFakeDocumentVectorLedger(workerClaim("extract-a", 1, "first", "token-a"))
+	backend := &fakeDocumentVectorBackend{putErr: fmt.Errorf("publish: %w", store.ErrConversationPolicyStale)}
+	worker := newFakeWorker(ledger, &fakeDocumentVectorProvider{
+		vectors: [][][]float32{{{1, 2, 3}}},
+	}, backend)
+
+	result, err := worker.Run(t.Context(), 1, 10)
+	requirements.ErrorIs(err, store.ErrConversationPolicyStale)
+	assertions.Zero(result.Retry + result.Terminal)
+	assertions.Empty(ledger.failures, "a policy transition is not a document failure")
+	assertions.Empty(ledger.committed)
+	assertions.Equal([]string{"token-a"}, ledger.released)
+}
+
 func TestWorkerRunClassifiesProviderSuffixWhenPrefixBackendPutFails(t *testing.T) {
 	assertions := assert.New(t)
 	requirements := require.New(t)

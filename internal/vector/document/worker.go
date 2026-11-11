@@ -243,6 +243,15 @@ func (w *Worker) Run(ctx context.Context, generationID GenerationID, limit int) 
 	if err := w.validate(generationID); err != nil {
 		return result, err
 	}
+	if policy, ok := w.deps.Ledger.(interface {
+		CaptureConversationPolicyWork(ctx context.Context) (context.Context, error)
+	}); ok {
+		var err error
+		ctx, err = policy.CaptureConversationPolicyWork(ctx)
+		if err != nil {
+			return result, err
+		}
+	}
 	generation, err := w.deps.Ledger.GetDocumentVectorGeneration(ctx, int64(generationID))
 	if err != nil {
 		return result, fmt.Errorf("read document vector generation: %w", err)
@@ -302,7 +311,19 @@ func (w *Worker) Run(ctx context.Context, generationID GenerationID, limit int) 
 	groups, inputs, err = w.publishSaved(ctx, generationID, heartbeat, groups, inputs, &result)
 	runErr = errors.Join(runErr, err)
 	if len(inputs) > 0 && ctx.Err() == nil && heartbeat.err() == nil {
-		runErr = errors.Join(runErr, w.publishRequests(ctx, generationID, heartbeat, groups, inputs, &result))
+		// Admission names every document this pass may send. Unsent claims
+		// are released, with their attempt refunded, when Run returns.
+		var tokens []string
+		for _, group := range groups {
+			for _, claim := range group {
+				tokens = append(tokens, claim.Token)
+			}
+		}
+		providerCtx := store.WithConversationPolicyDocumentTokens(heartbeat.context(), int64(generationID), tokens)
+		if err := store.CheckConversationPolicyAdmission(providerCtx); err != nil {
+			return result, errors.Join(runErr, err, heartbeat.err())
+		}
+		runErr = errors.Join(runErr, w.publishRequests(ctx, providerCtx, generationID, heartbeat, groups, inputs, &result))
 	}
 	return result, errors.Join(runErr, heartbeat.err(), ctx.Err())
 }
@@ -344,11 +365,11 @@ func (w *Worker) publishSaved(
 // one is sent. A request to yield is scheduling control: the claims of
 // documents not yet embedded are released without counting an attempt.
 func (w *Worker) publishRequests(
-	ctx context.Context, generationID GenerationID, heartbeat *workerClaimHeartbeat,
+	ctx, providerCtx context.Context, generationID GenerationID, heartbeat *workerClaimHeartbeat,
 	groups [][]*store.DocumentVectorChunkClaim, inputs []vector.DocumentInput, result *RunResult,
 ) (runErr error) {
 	sent := 0
-	providerErr := vector.EmbedDocumentRequests(heartbeat.context(), w.deps.Provider, inputs, func(first, count int) {
+	providerErr := vector.EmbedDocumentRequests(providerCtx, w.deps.Provider, inputs, func(first, count int) {
 		requestGroups := groups[first : first+count]
 		result.countProviderRequest(inputs[first : first+count])
 		for _, group := range requestGroups {
@@ -360,7 +381,7 @@ func (w *Worker) publishRequests(
 		func(first int, vectors [][][]float32) error {
 			end := min(first+len(vectors), len(inputs))
 			runErr = errors.Join(runErr, w.publishResponse(
-				ctx, generationID, heartbeat, groups[first:end], inputs[first:end], vectors, nil, result,
+				ctx, providerCtx, generationID, heartbeat, groups[first:end], inputs[first:end], vectors, nil, result,
 			))
 			sent = end
 			return errors.Join(runErr, ctx.Err(), heartbeat.err())
@@ -388,7 +409,7 @@ func (w *Worker) publishRequests(
 		return errors.Join(runErr, providerErr)
 	}
 	return errors.Join(runErr, w.publishResponse(
-		ctx, generationID, heartbeat, submittedGroups, submittedInputs, nil, providerErr, result,
+		ctx, providerCtx, generationID, heartbeat, submittedGroups, submittedInputs, nil, providerErr, result,
 	))
 }
 
@@ -428,7 +449,7 @@ func (w *Worker) releaseUnfinishedClaims(
 // publishResponse saves one provider response, then publishes or fails its
 // claims. Cancellation and heartbeat loss are left for the caller to report.
 func (w *Worker) publishResponse(
-	ctx context.Context, generationID GenerationID, heartbeat *workerClaimHeartbeat,
+	ctx, providerCtx context.Context, generationID GenerationID, heartbeat *workerClaimHeartbeat,
 	groups [][]*store.DocumentVectorChunkClaim, inputs []vector.DocumentInput,
 	vectors [][][]float32, providerErr error, result *RunResult,
 ) (runErr error) {
@@ -447,6 +468,9 @@ func (w *Worker) publishResponse(
 	}
 	result.Embedded += len(completedClaims)
 	if len(embeddings) > 0 {
+		if err := store.CheckConversationPolicyAdmission(providerCtx); err != nil {
+			return errors.Join(responseErr, err)
+		}
 		saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workerClaimCleanupTimeout)
 		// Claim loss still stops persistence; the run deadline only stops provider work.
 		stop := context.AfterFunc(heartbeat.context(), func() {
@@ -461,6 +485,11 @@ func (w *Worker) publishResponse(
 			putErr := fmt.Errorf("put unpublished document vectors: %w", err)
 			if ctx.Err() != nil || heartbeat.err() != nil {
 				return errors.Join(responseErr, putErr)
+			}
+			if errors.Is(err, store.ErrConversationPolicyStale) {
+				// A policy change after admission is not a backend failure;
+				// Run's cleanup releases these claims.
+				return errors.Join(responseErr, err)
 			}
 			failureErr := w.failClaims(ctx, generationID, completedClaims, fmt.Errorf("%w: %w", errBackendPut, err), heartbeat, result)
 			runErr = errors.Join(runErr, putErr, failureErr)

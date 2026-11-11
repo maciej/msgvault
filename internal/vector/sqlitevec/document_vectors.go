@@ -9,20 +9,22 @@ import (
 	"fmt"
 	"strings"
 
+	"go.kenn.io/msgvault/internal/store"
 	"go.kenn.io/msgvault/internal/vector/document"
 )
 
 // DocumentBackend is the independent attachment-document vector store. It
 // borrows its parent's connection and does not own or close it.
 type DocumentBackend struct {
-	db *sql.DB
+	db          *sql.DB
+	policyStore *store.Store
 }
 
 var _ document.Backend = (*DocumentBackend)(nil)
 
 // DocumentBackend returns a non-owning document-vector view of this backend.
 func (b *Backend) DocumentBackend() *DocumentBackend {
-	return &DocumentBackend{db: b.db}
+	return &DocumentBackend{db: b.db, policyStore: b.policyStore}
 }
 
 func (b *DocumentBackend) PutUnpublished(ctx context.Context, generationID document.GenerationID, dimension int, embeddings []document.Embedding) error {
@@ -36,6 +38,20 @@ func (b *DocumentBackend) PutUnpublished(ctx context.Context, generationID docum
 		return err
 	}
 
+	tokens := make([]string, len(embeddings))
+	for i, embedding := range embeddings {
+		tokens[i] = embedding.Token
+	}
+	if b.policyStore != nil {
+		release, err := b.policyStore.AcquireSQLiteConversationPolicyFence(ctx, store.ConversationPolicyShared)
+		if err != nil {
+			return err
+		}
+		defer release()
+		if err := b.policyStore.CheckSQLiteConversationPolicyDocumentTokens(ctx, int64(generationID), tokens); err != nil {
+			return err
+		}
+	}
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin document vector put: %w", err)
@@ -137,8 +153,41 @@ func (b *DocumentBackend) DeleteTokens(ctx context.Context, generationID documen
 	if err := document.ValidateTokens(generationID, tokens); err != nil {
 		return err
 	}
+	for start := 0; start < len(tokens); start += 500 {
+		if err := b.deleteDocumentTokenBatch(ctx, generationID, tokens[start:min(start+500, len(tokens))]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *DocumentBackend) deleteDocumentTokenBatch(ctx context.Context, generationID document.GenerationID, tokens []string) error {
+	if err := document.ValidateTokens(generationID, tokens); err != nil {
+		return err
+	}
 	if len(tokens) == 0 {
 		return nil
+	}
+	if b.policyStore != nil {
+		release, err := b.policyStore.AcquireSQLiteConversationPolicyFence(ctx, store.ConversationPolicyExclusive)
+		if err != nil {
+			return err
+		}
+		defer release()
+		deletable := make([]string, 0, len(tokens))
+		for _, token := range tokens {
+			published, err := b.policyStore.DocumentPolicyTokenPublished(ctx, nil, int64(generationID), token)
+			if err != nil {
+				return err
+			}
+			if !published {
+				deletable = append(deletable, token)
+			}
+		}
+		tokens = deletable
+		if len(tokens) == 0 {
+			return nil
+		}
 	}
 	tx, err := b.db.BeginTx(ctx, nil)
 	if err != nil {
