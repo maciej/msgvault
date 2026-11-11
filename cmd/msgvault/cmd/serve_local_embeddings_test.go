@@ -670,11 +670,15 @@ func TestLocalEmbeddingsStartupSharedChoice(t *testing.T) {
 
 func TestLocalEmbeddingsSavedStartupSkipsChangedRecipe(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		edit map[string]any
+		name      string
+		path      []string
+		edit      map[string]any
+		afterWait bool
 	}{
-		{name: "stale runtime", edit: map[string]any{"document_prefix": "changed: "}},
-		{name: "custom endpoint", edit: map[string]any{"endpoint": "https://api.example.test/v1"}},
+		{name: "stale runtime", path: []string{"vector", "embeddings"}, edit: map[string]any{"document_prefix": "changed: "}},
+		{name: "custom endpoint", path: []string{"vector", "embeddings"}, edit: map[string]any{"endpoint": "https://api.example.test/v1"}},
+		{name: "preprocessing changed", path: []string{"vector", "preprocess"}, edit: map[string]any{"strip_html": false}},
+		{name: "preprocessing changed while waiting", path: []string{"vector", "preprocess"}, edit: map[string]any{"strip_html": false}, afterWait: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newLocalActivationFixture(t, "nomic-embed-text")
@@ -682,13 +686,23 @@ func TestLocalEmbeddingsSavedStartupSkipsChangedRecipe(t *testing.T) {
 			f.handle = startVectorInit(f.ctx, f.store, f.cfg.DatabaseDSN(), nil, f.server, f.scheduler)
 			require.True(t, f.handle.WaitTimeout(5*time.Second))
 			require.NotNil(t, f.handle.vf)
+			if tc.afterWait {
+				f.handle = &vectorInitHandle{done: make(chan struct{}), vf: f.handle.vf}
+			}
 			f.controller.handle = f.handle
+			f.server.SetLocalEmbeddings(f.controller)
+			if tc.afterWait {
+				f.controller.StartFromChoice()
+			}
 			snapshot, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
-			_, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{{Path: []string{"vector", "embeddings"}, Values: tc.edit}})
+			_, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{{Path: tc.path, Values: tc.edit}})
 			require.NoError(t, err)
-			f.server.SetLocalEmbeddings(f.controller)
-			f.controller.StartFromChoice()
+			if tc.afterWait {
+				close(f.handle.done)
+			} else {
+				f.controller.StartFromChoice()
+			}
 			require.Eventually(t, func() bool {
 				request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
 				request.Header.Set("Authorization", "Bearer owner")

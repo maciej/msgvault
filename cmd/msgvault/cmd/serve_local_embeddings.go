@@ -100,9 +100,13 @@ func isOllamaEmbeddingEndpoint(ctx context.Context, endpoint string) bool {
 	return embeddingProviderName(endpoint) == "local" && probeOllamaServer(ctx, server).Catalog
 }
 
-func matchesBuiltinRecipe(live, saved vector.Config) bool {
+func matchesBuiltinRecipe(ctx context.Context, s *store.Store, live, saved vector.Config) bool {
+	resolved, err := resolvedVectorConfig(ctx, s, saved)
+	if err != nil {
+		return false
+	}
 	live.Embeddings.Endpoint = ""
-	return live.Embeddings == saved.Embeddings
+	return live.Embeddings == saved.Embeddings && live.GenerationFingerprint() == resolved.GenerationFingerprint()
 }
 
 // StartFromChoice queues first-time setup when a saved choice permits it.
@@ -154,7 +158,7 @@ func (c *localEmbeddingsController) StartFromChoice() {
 		c.handle.mu.Lock()
 		live := c.handle.vf
 		c.handle.mu.Unlock()
-		if live == nil || !matchesBuiltinRecipe(live.Cfg, cfg) {
+		if live == nil || !matchesBuiltinRecipe(ctx, c.store, live.Cfg, loaded.Vector) {
 			return nil
 		}
 		_, err = live.Backend.ActiveGeneration(ctx)
