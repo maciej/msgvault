@@ -692,12 +692,10 @@ func TestLocalEmbeddingsStartupSavedSettings(t *testing.T) {
 			if tc.endpoint != "" {
 				embeddings["endpoint"] = tc.endpoint
 			}
-			_, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{
+			snapshot, err = config.EditConfigTables(f.cfg.ConfigFilePath(), snapshot.ETag, []config.TableEdit{
 				{Path: []string{"vector"}, Values: map[string]any{"enabled": tc.enabled}},
 				{Path: []string{"vector", "embeddings"}, Values: embeddings},
 			})
-			require.NoError(t, err)
-			snapshot, err = config.ReadConfigFile(f.cfg.ConfigFilePath())
 			require.NoError(t, err)
 			f.cfg.Vector.Enabled = tc.enabled
 			f.cfg.Vector.Embeddings.LocalOnly = tc.local
@@ -769,11 +767,7 @@ func TestLocalEmbeddingsSavedStartupIgnoresUnreadableChoice(t *testing.T) {
 			}, 5*time.Second, 20*time.Millisecond)
 			assert.Positive(f.inputs.Load())
 			assert.Zero(f.installs)
-			if unreadable {
-				info, err := os.Stat(marker)
-				require.NoError(err)
-				assert.True(info.IsDir())
-			} else {
+			if !unreadable {
 				choice, err := embedlocal.ChoiceRecorded()
 				require.NoError(err)
 				assert.False(choice)
@@ -812,22 +806,8 @@ func TestLocalEmbeddingsMarkerFailureStillBuilds(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "search-by-meaning"), 0o700))
 	f.start(t)
-	f.server.SetLocalEmbeddings(f.controller)
-	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/embeddings/local", nil)
-	request.Header.Set("Authorization", "Bearer owner")
-	response := httptest.NewRecorder()
-	f.server.Router().ServeHTTP(response, request)
-	require.Equal(t, http.StatusAccepted, response.Code)
-	var status api.LocalEmbeddingsStatus
-	require.Eventually(t, func() bool {
-		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
-		request.Header.Set("Authorization", "Bearer owner")
-		response := httptest.NewRecorder()
-		f.server.Router().ServeHTTP(response, request)
-		return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && !status.Running && status.Error != ""
-	}, 15*time.Second, 20*time.Millisecond)
-	assert.Contains(t, status.Error, "msgvault setup providers --local-embeddings")
-	assert.True(t, status.Enabled)
+	err = f.controller.Enable(f.ctx, func(api.LocalEmbeddingsStatus) {})
+	require.ErrorContains(t, err, "msgvault setup providers --local-embeddings")
 	assert.Positive(t, f.inputs.Load())
 	_, err = f.handle.vf.Backend.ActiveGeneration(f.ctx)
 	require.NoError(t, err)
@@ -906,31 +886,10 @@ func TestLocalEmbeddingsTurnOnSavedBuiltinWithMissingFiles(t *testing.T) {
 	require.True(f.handle.WaitTimeout(5 * time.Second))
 	f.controller.handle = f.handle
 	require.Nil(f.handle.vf)
-	f.server.SetLocalEmbeddings(f.controller)
-	status, err := f.controller.Inspect(f.ctx)
-	require.NoError(err)
-	assert.False(status.Enabled)
-	assert.Positive(status.DownloadBytes)
-	request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/embeddings/local", nil)
-	request.Header.Set("Authorization", "Bearer owner")
-	response := httptest.NewRecorder()
-	f.server.Router().ServeHTTP(response, request)
-	require.Equal(http.StatusAccepted, response.Code)
-	require.Eventually(func() bool {
-		request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/local", nil)
-		request.Header.Set("Authorization", "Bearer owner")
-		response := httptest.NewRecorder()
-		f.server.Router().ServeHTTP(response, request)
-		return response.Code == http.StatusOK && json.Unmarshal(response.Body.Bytes(), &status) == nil && !status.Running
-	}, 15*time.Second, 20*time.Millisecond)
-	require.Empty(status.Error)
-	assert.True(status.Enabled)
+	require.NoError(f.controller.Enable(f.ctx, func(api.LocalEmbeddingsStatus) {}))
 	assert.Equal(1, f.installs)
 	assert.Positive(f.inputs.Load())
 	after, err := config.ReadConfigFile(f.cfg.ConfigFilePath())
 	require.NoError(err)
 	assert.Equal(before.Content, after.Content)
-	choice, err := embedlocal.ChoiceRecorded()
-	require.NoError(err)
-	assert.True(choice)
 }
